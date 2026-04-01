@@ -5,11 +5,15 @@ import { registerSeekCallback, usePlayerStore } from "../../store/playerStore";
 const BLOCKED_TITLE_KEYWORDS = ["live", "reaction", "cover", "vlog"];
 
 async function fetchAndPlayRelated(
-  videoId: string,
+  currentSong: { videoId: string; title: string; channel: string },
   apiKey: string,
 ): Promise<void> {
   try {
-    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&relatedToVideoId=${videoId}&videoCategoryId=10&key=${apiKey}&maxResults=5`;
+    // relatedToVideoId was deprecated by YouTube in Aug 2023 — use title search instead
+    const query = encodeURIComponent(
+      `${currentSong.title} ${currentSong.channel} official audio`,
+    );
+    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&q=${query}&maxResults=10&key=${apiKey}`;
     const res = await fetch(url);
     if (!res.ok) return;
     const data = await res.json();
@@ -24,6 +28,7 @@ async function fetchAndPlayRelated(
       };
     }>) {
       if (!item.id?.videoId) continue;
+      if (item.id.videoId === currentSong.videoId) continue;
       const title = item.snippet?.title?.toLowerCase() || "";
       if (BLOCKED_TITLE_KEYWORDS.some((kw) => title.includes(kw))) continue;
 
@@ -116,12 +121,11 @@ export function YouTubePlayer() {
                 const isAtEndOfQueue =
                   queueIndex >= queue.length - 1 && currentRepeat !== "all";
                 if (isAtEndOfQueue) {
-                  // Endless Radio: fetch related tracks
-                  const currentVideoId =
-                    usePlayerStore.getState().currentSong?.videoId;
+                  // Endless Radio: fetch related tracks by title
+                  const song = usePlayerStore.getState().currentSong;
                   const apiKey = localStorage.getItem("yt_api_key") || "";
-                  if (currentVideoId && apiKey) {
-                    fetchAndPlayRelated(currentVideoId, apiKey);
+                  if (song && apiKey) {
+                    fetchAndPlayRelated(song, apiKey);
                   } else {
                     setIsPlayingRef.current(false);
                   }

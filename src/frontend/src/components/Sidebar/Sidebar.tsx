@@ -14,7 +14,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useState } from "react";
-import { useInternetIdentity } from "../../hooks/useInternetIdentity";
+
 import { useAllPlaylists, useCreatePlaylist } from "../../hooks/useQueries";
 import { type Page, useNavigationStore } from "../../store/navigationStore";
 import { usePlayerStore } from "../../store/playerStore";
@@ -48,7 +48,7 @@ export function Sidebar() {
   const { page, navigate } = useNavigationStore();
   const { data: playlists = [], isLoading } = useAllPlaylists();
   const createPlaylist = useCreatePlaylist();
-  const { clear } = useInternetIdentity();
+
   const currentSong = usePlayerStore((s) => s.currentSong);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
@@ -59,9 +59,6 @@ export function Sidebar() {
     setNewName("");
     setCreating(false);
   };
-
-  // suppress unused var warning — clear is used for logout elsewhere
-  void clear;
 
   return (
     <aside

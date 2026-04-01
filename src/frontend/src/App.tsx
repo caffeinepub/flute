@@ -1,15 +1,15 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Toaster } from "@/components/ui/sonner";
-import { Loader2, Music2 } from "lucide-react";
+import { Music2 } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 import { BottomNav } from "./components/BottomNav";
 import { PlayerBar } from "./components/Player/PlayerBar";
 import { YouTubePlayer } from "./components/Player/YouTubePlayer";
 import { Sidebar } from "./components/Sidebar/Sidebar";
-import { useInternetIdentity } from "./hooks/useInternetIdentity";
-import { useSaveProfile, useUserProfile } from "./hooks/useQueries";
+import { useLocalAuth } from "./hooks/useLocalAuth";
+import { loadSavedTheme } from "./lib/theme";
 import { History } from "./pages/History";
 import { Home } from "./pages/Home";
 import { Library } from "./pages/Library";
@@ -21,14 +21,25 @@ import { Search } from "./pages/Search";
 import { Settings } from "./pages/Settings";
 import { useNavigationStore } from "./store/navigationStore";
 
+// Apply saved theme on startup
+loadSavedTheme();
+
 function SignInPage() {
-  const { login, isLoggingIn } = useInternetIdentity();
+  const { login, loginAsGuest } = useLocalAuth();
+  const [username, setUsername] = useState("");
+
+  const handleLogin = () => {
+    const trimmed = username.trim();
+    if (!trimmed) return;
+    login(trimmed);
+  };
+
   return (
     <div className="min-h-screen bg-background flex items-center justify-center">
       <motion.div
         initial={{ opacity: 0, y: 24 }}
         animate={{ opacity: 1, y: 0 }}
-        className="flex flex-col items-center gap-8 p-10 bg-card rounded-2xl shadow-card w-full max-w-sm mx-4"
+        className="flex flex-col items-center gap-6 p-10 bg-card rounded-2xl shadow-card w-full max-w-sm mx-4"
       >
         <div className="flex items-center gap-3">
           <div className="w-12 h-12 rounded-full bg-primary flex items-center justify-center">
@@ -40,86 +51,47 @@ function SignInPage() {
         </div>
         <div className="text-center">
           <h1 className="text-xl font-semibold text-foreground">
-            Sign in to Flute
+            Welcome to Flute
           </h1>
           <p className="text-muted-foreground text-sm mt-1">
             Your personal music universe
           </p>
         </div>
-        <Button
-          data-ocid="signin.primary_button"
-          className="w-full bg-primary text-primary-foreground hover:bg-primary/90 font-semibold h-12 rounded-full"
-          onClick={() => login()}
-          disabled={isLoggingIn}
-        >
-          {isLoggingIn ? (
-            <>
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Signing in...
-            </>
-          ) : (
-            "Continue with Internet Identity"
-          )}
-        </Button>
-        <p className="text-xs text-muted-foreground text-center">
-          Secure, private, decentralized authentication
-        </p>
-      </motion.div>
-    </div>
-  );
-}
-
-function ProfileSetup({ onComplete }: { onComplete: () => void }) {
-  const [name, setName] = useState("");
-  const saveProfile = useSaveProfile();
-
-  const handleSubmit = async () => {
-    if (!name.trim()) return;
-    await saveProfile.mutateAsync({ name: name.trim() });
-    onComplete();
-  };
-
-  return (
-    <div className="min-h-screen bg-background flex items-center justify-center">
-      <motion.div
-        initial={{ opacity: 0, y: 24 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="flex flex-col gap-6 p-10 bg-card rounded-2xl shadow-card w-full max-w-sm mx-4"
-      >
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center">
-            <Music2 className="w-5 h-5 text-primary-foreground" />
+        <div className="w-full space-y-3">
+          <Input
+            data-ocid="signin.username_input"
+            placeholder="Choose a username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+            className="bg-accent border-border text-foreground h-11"
+            autoFocus
+          />
+          <Button
+            data-ocid="signin.primary_button"
+            className="w-full bg-primary text-primary-foreground hover:bg-primary/90 font-semibold h-12 rounded-full"
+            onClick={handleLogin}
+            disabled={!username.trim()}
+          >
+            Get Started
+          </Button>
+          <div className="relative flex items-center gap-3">
+            <div className="flex-1 h-px bg-border" />
+            <span className="text-xs text-muted-foreground">or</span>
+            <div className="flex-1 h-px bg-border" />
           </div>
-          <span className="text-2xl font-bold text-foreground">Flute</span>
+          <Button
+            data-ocid="signin.guest_button"
+            variant="outline"
+            className="w-full h-11 rounded-full border-border text-foreground hover:bg-accent"
+            onClick={loginAsGuest}
+          >
+            Continue as Guest
+          </Button>
         </div>
-        <div>
-          <h2 className="text-xl font-semibold text-foreground">
-            What should we call you?
-          </h2>
-          <p className="text-sm text-muted-foreground mt-1">
-            Set up your display name
-          </p>
-        </div>
-        <Input
-          data-ocid="profile.input"
-          placeholder="Your name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-          className="bg-accent border-border text-foreground h-11"
-          autoFocus
-        />
-        <Button
-          data-ocid="profile.submit_button"
-          className="w-full bg-primary text-primary-foreground hover:bg-primary/90 font-semibold h-11 rounded-full"
-          onClick={handleSubmit}
-          disabled={!name.trim() || saveProfile.isPending}
-        >
-          {saveProfile.isPending ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            "Get Started"
-          )}
-        </Button>
+        <p className="text-xs text-muted-foreground text-center">
+          Your data is stored locally in your browser.
+        </p>
       </motion.div>
     </div>
   );
@@ -150,7 +122,6 @@ function MainLayout() {
   const { page, navigate, playlistId } = useNavigationStore();
   const apiKey = localStorage.getItem("yt_api_key");
 
-  // Listen for navigation events from Meel page
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail as string;
@@ -211,39 +182,9 @@ function MainLayout() {
 }
 
 export default function App() {
-  const { identity, isInitializing } = useInternetIdentity();
-  const {
-    data: profile,
-    isLoading: profileLoading,
-    refetch,
-  } = useUserProfile();
+  const { user } = useLocalAuth();
 
-  if (isInitializing) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-12 h-12 rounded-full bg-primary flex items-center justify-center">
-            <Music2 className="w-6 h-6 text-primary-foreground" />
-          </div>
-          <Loader2 className="w-6 h-6 animate-spin text-primary" />
-        </div>
-      </div>
-    );
-  }
-
-  if (!identity) return <SignInPage />;
-
-  if (profileLoading) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <Loader2 className="w-6 h-6 animate-spin text-primary" />
-      </div>
-    );
-  }
-
-  if (!profile) {
-    return <ProfileSetup onComplete={() => refetch()} />;
-  }
+  if (!user) return <SignInPage />;
 
   return <MainLayout />;
 }
