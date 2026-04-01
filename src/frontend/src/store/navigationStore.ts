@@ -8,7 +8,8 @@ export type Page =
   | "liked"
   | "history"
   | "settings"
-  | "nowplaying";
+  | "nowplaying"
+  | "meel";
 
 interface NavigationState {
   page: Page;

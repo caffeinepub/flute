@@ -74,7 +74,7 @@ export function PlayerBar() {
     return (
       <div
         data-ocid="player.panel"
-        className="fixed bottom-0 left-0 right-0 h-20 bg-[oklch(0.174_0_0)] border-t border-[oklch(0.24_0_0)] z-50 flex items-center justify-center"
+        className="fixed bottom-16 lg:bottom-0 left-0 right-0 h-20 bg-[oklch(0.174_0_0)] border-t border-[oklch(0.24_0_0)] z-50 flex items-center justify-center"
       >
         <p className="text-muted-foreground text-sm">
           No song playing &mdash; search for music to get started
@@ -86,7 +86,7 @@ export function PlayerBar() {
   return (
     <div
       data-ocid="player.panel"
-      className="fixed bottom-0 left-0 right-0 h-[88px] bg-[oklch(0.174_0_0)] border-t border-[oklch(0.24_0_0)] z-50 flex items-center px-4 gap-4"
+      className="fixed bottom-16 lg:bottom-0 left-0 right-0 h-[88px] bg-[oklch(0.174_0_0)] border-t border-[oklch(0.24_0_0)] z-50 flex items-center px-4 gap-4"
     >
       {/* Left: song info */}
       <div className="flex items-center gap-3 w-64 flex-shrink-0 min-w-0">
@@ -212,7 +212,7 @@ export function PlayerBar() {
       </div>
 
       {/* Right: volume + queue */}
-      <div className="flex items-center gap-3 w-48 justify-end flex-shrink-0">
+      <div className="hidden md:flex items-center gap-3 w-48 justify-end flex-shrink-0">
         <button
           type="button"
           data-ocid="player.secondary_button"

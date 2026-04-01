@@ -18,6 +18,8 @@ const GENRE_SHORTCUTS = [
   "Electronic EDM",
 ];
 
+const BLOCKED_TITLE_KEYWORDS = ["live", "reaction", "cover", "vlog"];
+
 function parseISO8601Duration(duration: string): string {
   const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
   if (!match) return "0:00";
@@ -30,7 +32,8 @@ function parseISO8601Duration(duration: string): string {
 }
 
 async function searchYouTube(query: string, apiKey: string): Promise<Song[]> {
-  const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoCategoryId=10&q=${encodeURIComponent(query)}&key=${apiKey}&maxResults=20`;
+  const filteredQuery = `${query} official audio`;
+  const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoCategoryId=10&q=${encodeURIComponent(filteredQuery)}&key=${apiKey}&maxResults=20`;
   const searchRes = await fetch(searchUrl);
   if (!searchRes.ok) throw new Error(`YouTube API error: ${searchRes.status}`);
   const searchData = await searchRes.json();
@@ -57,7 +60,13 @@ async function searchYouTube(query: string, apiKey: string): Promise<Song[]> {
   }
 
   return searchData.items
-    .filter((item: { id?: { videoId?: string } }) => item.id?.videoId)
+    .filter(
+      (item: { id?: { videoId?: string }; snippet?: { title?: string } }) => {
+        if (!item.id?.videoId) return false;
+        const title = item.snippet?.title?.toLowerCase() || "";
+        return !BLOCKED_TITLE_KEYWORDS.some((kw) => title.includes(kw));
+      },
+    )
     .map(
       (item: {
         id: { videoId: string };
@@ -122,58 +131,45 @@ export function Search() {
     }
 
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail as string;
+      const detail = (e as CustomEvent<string>).detail;
       setQuery(detail);
       doSearch(detail);
     };
+
     window.addEventListener("flute-search", handler);
     return () => window.removeEventListener("flute-search", handler);
   }, [doSearch]);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") doSearch(query);
   };
 
   return (
-    <div className="px-6 py-8 space-y-8">
+    <div className="px-6 py-8">
       <motion.div
-        initial={{ opacity: 0, y: -10 }}
+        initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
+        className="mb-6"
       >
         <h1 className="text-2xl font-bold text-foreground mb-4">Search</h1>
-        <div className="relative max-w-xl">
-          <SearchIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+        <div className="relative">
+          <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
-            data-ocid="search.search_input"
+            data-ocid="search.input"
+            placeholder="Songs, artists, genres..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Search songs, artists, albums..."
-            className="pl-12 h-12 bg-accent border-border text-foreground placeholder:text-muted-foreground text-base rounded-full"
+            className="pl-10 bg-accent border-border text-foreground h-12 rounded-full"
           />
         </div>
-
-        {!apiKey && (
-          <div className="mt-3 flex items-center gap-2 text-yellow-400 text-sm">
-            <AlertCircle className="w-4 h-4" />
-            <span>
-              YouTube API key not set.{" "}
-              <button
-                type="button"
-                onClick={() => navigate("settings")}
-                className="underline hover:text-yellow-200"
-              >
-                Add it in Settings
-              </button>
-            </span>
-          </div>
-        )}
       </motion.div>
 
+      {/* Genre shortcuts */}
       {!query && (
-        <section>
-          <h2 className="text-lg font-semibold text-foreground mb-3">
-            Quick Picks
+        <div className="mb-6">
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+            Browse
           </h2>
           <div className="flex flex-wrap gap-2">
             {GENRE_SHORTCUTS.map((g) => (
@@ -185,70 +181,80 @@ export function Search() {
                   setQuery(g);
                   doSearch(g);
                 }}
-                className="px-4 py-2 rounded-full bg-accent hover:bg-primary hover:text-primary-foreground text-sm font-medium text-foreground transition-colors border border-border"
+                className="px-4 py-2 rounded-full bg-accent text-foreground text-sm hover:bg-accent/70 transition-colors"
               >
                 {g}
               </button>
             ))}
           </div>
-        </section>
-      )}
-
-      {error && (
-        <div
-          data-ocid="search.error_state"
-          className="flex items-center gap-2 text-destructive"
-        >
-          <AlertCircle className="w-4 h-4" />
-          <span className="text-sm">{error}</span>
         </div>
       )}
 
-      {loading && (
+      {/* Error */}
+      {error && (
         <div
-          data-ocid="search.loading_state"
-          className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4"
+          data-ocid="search.error_state"
+          className="flex items-center gap-2 p-4 rounded-lg bg-destructive/20 text-destructive mb-4"
         >
-          {["s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9"].map(
-            (k) => (
-              <div key={k} className="space-y-3">
-                <Skeleton className="aspect-square rounded-lg bg-accent" />
-                <Skeleton className="h-3 rounded bg-accent" />
-                <Skeleton className="h-3 w-2/3 rounded bg-accent" />
-              </div>
-            ),
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          <span className="text-sm">{error}</span>
+          {error.includes("API key") && (
+            <button
+              type="button"
+              className="ml-auto text-xs underline"
+              onClick={() => navigate("settings")}
+            >
+              Settings
+            </button>
           )}
         </div>
       )}
 
-      {!loading && results.length > 0 && (
-        <section>
-          <h2 className="text-lg font-semibold text-foreground mb-4">
-            Results for &ldquo;{query}&rdquo;
-          </h2>
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
-            {results.map((song, i) => (
-              <SongCard
-                key={song.videoId}
-                song={song}
-                queue={results}
-                index={i}
-                variant="grid"
-              />
-            ))}
-          </div>
-        </section>
+      {/* Loading */}
+      {loading && (
+        <div data-ocid="search.loading_state" className="space-y-2">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div
+              key={`skel-${
+                // biome-ignore lint/suspicious/noArrayIndexKey: skeleton
+                i
+              }`}
+              className="flex items-center gap-3 p-3"
+            >
+              <Skeleton className="w-12 h-12 rounded bg-accent flex-shrink-0" />
+              <div className="space-y-2 flex-1">
+                <Skeleton className="h-3 rounded bg-accent" />
+                <Skeleton className="h-3 w-2/3 rounded bg-accent" />
+              </div>
+            </div>
+          ))}
+        </div>
       )}
 
-      {!loading && query && results.length === 0 && !error && (
+      {/* Results */}
+      {!loading && results.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="space-y-1"
+        >
+          {results.map((song, i) => (
+            <SongCard
+              key={song.videoId}
+              song={song}
+              queue={results}
+              index={i}
+              variant="list"
+            />
+          ))}
+        </motion.div>
+      )}
+
+      {/* Empty */}
+      {!loading && !error && results.length === 0 && query && (
         <div data-ocid="search.empty_state" className="text-center py-16">
           <SearchIcon className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
-          <p className="text-muted-foreground">
-            No results found for &ldquo;{query}&rdquo;
-          </p>
-          <p className="text-muted-foreground text-sm mt-1">
-            Try a different search term
-          </p>
+          <p className="text-muted-foreground">No results for "{query}"</p>
         </div>
       )}
     </div>

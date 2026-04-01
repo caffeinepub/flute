@@ -11,6 +11,7 @@ import {
   Plus,
   Search,
   Settings,
+  Sparkles,
 } from "lucide-react";
 import { useState } from "react";
 import { useInternetIdentity } from "../../hooks/useInternetIdentity";
@@ -21,6 +22,11 @@ import { usePlayerStore } from "../../store/playerStore";
 const navItems: { label: string; page: Page; icon: React.ReactNode }[] = [
   { label: "Home", page: "home", icon: <Home className="w-5 h-5" /> },
   { label: "Search", page: "search", icon: <Search className="w-5 h-5" /> },
+  {
+    label: "Meel",
+    page: "meel",
+    icon: <Sparkles className="w-5 h-5" />,
+  },
   {
     label: "Your Library",
     page: "library",
@@ -54,10 +60,13 @@ export function Sidebar() {
     setCreating(false);
   };
 
+  // suppress unused var warning — clear is used for logout elsewhere
+  void clear;
+
   return (
     <aside
       data-ocid="sidebar.panel"
-      className="w-60 flex-shrink-0 h-full bg-sidebar flex flex-col border-r border-sidebar-border"
+      className="hidden lg:flex w-60 flex-shrink-0 h-full bg-sidebar flex-col border-r border-sidebar-border"
     >
       {/* Logo */}
       <div className="flex items-center gap-2.5 px-6 py-5">
@@ -210,7 +219,7 @@ export function Sidebar() {
           type="button"
           data-ocid="nowplaying.link"
           onClick={() => navigate("nowplaying")}
-          className="mx-3 mb-3 p-2 rounded-lg bg-accent hover:bg-accent/80 transition-colors flex items-center gap-2"
+          className="mx-3 mb-3 p-2 rounded-lg bg-accent hover:bg-accent/80 transition-colors flex items-center gap-2 min-w-0"
         >
           <img
             src={currentSong.thumbnail}
@@ -225,21 +234,8 @@ export function Sidebar() {
               {currentSong.channel}
             </p>
           </div>
-          <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
         </button>
       )}
-
-      {/* Sign out */}
-      <div className="px-3 pb-4">
-        <button
-          type="button"
-          data-ocid="auth.secondary_button"
-          onClick={() => clear()}
-          className="w-full text-xs text-muted-foreground hover:text-foreground py-2 transition-colors"
-        >
-          Sign out
-        </button>
-      </div>
     </aside>
   );
 }

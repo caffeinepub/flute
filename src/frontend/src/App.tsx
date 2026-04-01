@@ -3,7 +3,8 @@ import { Input } from "@/components/ui/input";
 import { Toaster } from "@/components/ui/sonner";
 import { Loader2, Music2 } from "lucide-react";
 import { motion } from "motion/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { BottomNav } from "./components/BottomNav";
 import { PlayerBar } from "./components/Player/PlayerBar";
 import { YouTubePlayer } from "./components/Player/YouTubePlayer";
 import { Sidebar } from "./components/Sidebar/Sidebar";
@@ -13,6 +14,7 @@ import { History } from "./pages/History";
 import { Home } from "./pages/Home";
 import { Library } from "./pages/Library";
 import { LikedSongs } from "./pages/LikedSongs";
+import { Meel } from "./pages/Meel";
 import { NowPlaying } from "./pages/NowPlaying";
 import { PlaylistDetail } from "./pages/PlaylistDetail";
 import { Search } from "./pages/Search";
@@ -145,8 +147,20 @@ function ApiKeyBanner() {
 }
 
 function MainLayout() {
-  const { page, playlistId } = useNavigationStore();
+  const { page, navigate, playlistId } = useNavigationStore();
   const apiKey = localStorage.getItem("yt_api_key");
+
+  // Listen for navigation events from Meel page
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as string;
+      if (detail) navigate(detail as Parameters<typeof navigate>[0]);
+    };
+    window.addEventListener("flute-navigate", handler);
+    return () => window.removeEventListener("flute-navigate", handler);
+  }, [navigate]);
+
+  const isMeel = page === "meel";
 
   const renderPage = () => {
     switch (page) {
@@ -166,6 +180,8 @@ function MainLayout() {
         return <Settings />;
       case "nowplaying":
         return <NowPlaying />;
+      case "meel":
+        return <Meel />;
       default:
         return <Home />;
     }
@@ -175,11 +191,20 @@ function MainLayout() {
     <div className="flex h-screen overflow-hidden bg-background">
       <Sidebar />
       <div className="flex flex-col flex-1 min-w-0">
-        {!apiKey && page !== "settings" && <ApiKeyBanner />}
-        <main className="flex-1 overflow-y-auto pb-24">{renderPage()}</main>
+        {!apiKey && page !== "settings" && page !== "meel" && <ApiKeyBanner />}
+        <main
+          className={
+            isMeel
+              ? "flex-1 overflow-hidden"
+              : "flex-1 overflow-y-auto pb-24 lg:pb-24 pb-40"
+          }
+        >
+          {renderPage()}
+        </main>
       </div>
       <YouTubePlayer />
       <PlayerBar />
+      <BottomNav />
       <Toaster position="top-right" />
     </div>
   );

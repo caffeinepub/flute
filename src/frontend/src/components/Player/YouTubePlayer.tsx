@@ -2,6 +2,48 @@ import { useEffect, useRef } from "react";
 import { useCacheSong, useRecordListening } from "../../hooks/useQueries";
 import { registerSeekCallback, usePlayerStore } from "../../store/playerStore";
 
+const BLOCKED_TITLE_KEYWORDS = ["live", "reaction", "cover", "vlog"];
+
+async function fetchAndPlayRelated(
+  videoId: string,
+  apiKey: string,
+): Promise<void> {
+  try {
+    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&relatedToVideoId=${videoId}&videoCategoryId=10&key=${apiKey}&maxResults=5`;
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.items || data.items.length === 0) return;
+
+    for (const item of data.items as Array<{
+      id?: { videoId?: string };
+      snippet?: {
+        title?: string;
+        channelTitle?: string;
+        thumbnails?: { high?: { url: string }; default?: { url: string } };
+      };
+    }>) {
+      if (!item.id?.videoId) continue;
+      const title = item.snippet?.title?.toLowerCase() || "";
+      if (BLOCKED_TITLE_KEYWORDS.some((kw) => title.includes(kw))) continue;
+
+      usePlayerStore.getState().playSong({
+        videoId: item.id.videoId,
+        title: item.snippet?.title || "",
+        channel: item.snippet?.channelTitle || "",
+        thumbnail:
+          item.snippet?.thumbnails?.high?.url ||
+          item.snippet?.thumbnails?.default?.url ||
+          "",
+        duration: "",
+      });
+      break;
+    }
+  } catch {
+    // silently fail
+  }
+}
+
 export function YouTubePlayer() {
   const playerRef = useRef<YT.Player | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -62,12 +104,30 @@ export function YouTubePlayer() {
           onStateChange: (event) => {
             const state = event.data;
             if (state === 0) {
-              const { repeat: currentRepeat } = usePlayerStore.getState();
+              const {
+                repeat: currentRepeat,
+                queue,
+                queueIndex,
+              } = usePlayerStore.getState();
               if (currentRepeat === "one") {
                 player.seekTo(0, true);
                 player.playVideo();
               } else {
-                nextRef.current();
+                const isAtEndOfQueue =
+                  queueIndex >= queue.length - 1 && currentRepeat !== "all";
+                if (isAtEndOfQueue) {
+                  // Endless Radio: fetch related tracks
+                  const currentVideoId =
+                    usePlayerStore.getState().currentSong?.videoId;
+                  const apiKey = localStorage.getItem("yt_api_key") || "";
+                  if (currentVideoId && apiKey) {
+                    fetchAndPlayRelated(currentVideoId, apiKey);
+                  } else {
+                    setIsPlayingRef.current(false);
+                  }
+                } else {
+                  nextRef.current();
+                }
               }
             } else if (state === 1) {
               setIsPlayingRef.current(true);

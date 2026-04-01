@@ -32,6 +32,33 @@ const GENRES = [
   { label: "Country", color: "bg-amber-700", query: "country hits 2024" },
 ];
 
+const MOODS = [
+  {
+    label: "Deep Focus",
+    emoji: "🎯",
+    query: "Lofi study music long play",
+    gradient: "from-blue-600 to-indigo-800",
+  },
+  {
+    label: "Gym Beast",
+    emoji: "💪",
+    query: "Aggressive Phonk music workout",
+    gradient: "from-red-600 to-orange-700",
+  },
+  {
+    label: "Midnight Chill",
+    emoji: "🌙",
+    query: "Midnight chill RnB slow",
+    gradient: "from-purple-700 to-slate-800",
+  },
+  {
+    label: "High Energy",
+    emoji: "⚡",
+    query: "High energy EDM workout",
+    gradient: "from-yellow-500 to-pink-600",
+  },
+];
+
 const SKEL_6 = ["s0", "s1", "s2", "s3", "s4", "s5"];
 
 function getGreeting() {
@@ -49,6 +76,8 @@ export function Home() {
   const { data: allSongs = [] } = useAllSongs();
   const { data: playlists = [] } = useAllPlaylists();
   const { navigate } = useNavigationStore();
+  // suppress unused - playSong used only by SongCard via queue
+  void usePlayerStore;
   const username =
     profile?.name || identity?.getPrincipal().toString().slice(0, 8) || "there";
 
@@ -56,6 +85,12 @@ export function Home() {
   const recentSongs: Song[] = recentSongIds
     .map((id) => allSongs.find((s) => s.videoId === id))
     .filter((s): s is Song => !!s);
+
+  const triggerSearch = (query: string) => {
+    navigate("search");
+    sessionStorage.setItem("flute_search_query", query);
+    window.dispatchEvent(new CustomEvent("flute-search", { detail: query }));
+  };
 
   return (
     <div className="px-6 py-8 space-y-10">
@@ -69,6 +104,28 @@ export function Home() {
         </h1>
       </motion.div>
 
+      {/* Mood Buttons */}
+      <section>
+        <h2 className="text-lg font-bold text-foreground mb-3">Mood</h2>
+        <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
+          {MOODS.map((mood, i) => (
+            <motion.button
+              key={mood.label}
+              type="button"
+              data-ocid={`mood.item.${i + 1}`}
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: i * 0.08 }}
+              onClick={() => triggerSearch(mood.query)}
+              className={`bg-gradient-to-br ${mood.gradient} flex-shrink-0 flex items-center gap-2 px-5 py-3 rounded-full text-white font-semibold text-sm shadow-lg hover:opacity-90 hover:scale-105 transition-all`}
+            >
+              <span className="text-base">{mood.emoji}</span>
+              {mood.label}
+            </motion.button>
+          ))}
+        </div>
+      </section>
+
       {/* Quick access: playlists */}
       {playlists.length > 0 && (
         <section>
@@ -78,8 +135,8 @@ export function Home() {
                 key={pl.id.toString()}
                 type="button"
                 data-ocid={`home.playlist.item.${i + 1}`}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
+                initial={{ opacity: 0, scale: 0.97 }}
+                animate={{ opacity: 1, scale: 1 }}
                 transition={{ delay: i * 0.05 }}
                 onClick={() => navigate("playlist", pl.id)}
                 className="flex items-center gap-3 bg-accent hover:bg-accent/80 rounded-lg overflow-hidden transition-colors group h-14"
@@ -147,13 +204,7 @@ export function Home() {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ delay: i * 0.04 }}
-              onClick={() => {
-                navigate("search");
-                sessionStorage.setItem("flute_search_query", genre.query);
-                window.dispatchEvent(
-                  new CustomEvent("flute-search", { detail: genre.query }),
-                );
-              }}
+              onClick={() => triggerSearch(genre.query)}
               className={`${genre.color} rounded-xl p-4 h-24 flex items-end hover:opacity-90 transition-opacity relative overflow-hidden`}
             >
               <span className="text-lg font-bold text-white">
