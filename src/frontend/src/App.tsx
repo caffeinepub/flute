@@ -97,30 +97,8 @@ function SignInPage() {
   );
 }
 
-function ApiKeyBanner() {
-  const { navigate } = useNavigationStore();
-  return (
-    <div
-      data-ocid="api_key.error_state"
-      className="flex items-center justify-between px-6 py-2 bg-yellow-900/40 border-b border-yellow-700/40 text-yellow-300 text-xs"
-    >
-      <span>
-        ⚠ No YouTube API key set. Search and related songs won&apos;t work.
-      </span>
-      <button
-        type="button"
-        className="underline hover:text-yellow-100 ml-4"
-        onClick={() => navigate("settings")}
-      >
-        Go to Settings
-      </button>
-    </div>
-  );
-}
-
 function MainLayout() {
   const { page, navigate, playlistId } = useNavigationStore();
-  const apiKey = localStorage.getItem("yt_api_key");
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -162,7 +140,6 @@ function MainLayout() {
     <div className="flex h-screen overflow-hidden bg-background">
       <Sidebar />
       <div className="flex flex-col flex-1 min-w-0">
-        {!apiKey && page !== "settings" && page !== "meel" && <ApiKeyBanner />}
         <main
           className={
             isMeel

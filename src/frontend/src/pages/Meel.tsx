@@ -17,139 +17,8 @@ import {
   useLikedSongs,
   useUnlikeSong,
 } from "../hooks/useQueries";
+import { fetchTrending } from "../lib/invidious";
 import { usePlayerStore } from "../store/playerStore";
-
-function parseISO8601DurationSeconds(duration: string): number {
-  const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-  if (!match) return 0;
-  const h = Number.parseInt(match[1] || "0");
-  const m = Number.parseInt(match[2] || "0");
-  const s = Number.parseInt(match[3] || "0");
-  return h * 3600 + m * 60 + s;
-}
-
-const BLOCKED_KEYWORDS = ["live", "reaction", "cover", "vlog"];
-
-function isMusicVideo(title: string, durationSeconds: number): boolean {
-  if (durationSeconds < 120) return false;
-  const lower = title.toLowerCase();
-  return !BLOCKED_KEYWORDS.some((kw) => lower.includes(kw));
-}
-
-async function fetchMeelTracks(apiKey: string): Promise<Song[]> {
-  const trendingUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&chart=mostPopular&videoCategoryId=10&regionCode=US&maxResults=20&key=${apiKey}`;
-
-  const genres: string[] = (() => {
-    try {
-      const stored = localStorage.getItem("flute_favorite_genres");
-      if (stored) return JSON.parse(stored) as string[];
-    } catch {
-      // ignore
-    }
-    return [];
-  })();
-
-  const fetches: Promise<Response>[] = [fetch(trendingUrl)];
-
-  for (const genre of genres.slice(0, 3)) {
-    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoCategoryId=10&q=${encodeURIComponent(`${genre} official audio`)}&key=${apiKey}&maxResults=5`;
-    fetches.push(fetch(url));
-  }
-
-  const responses = await Promise.all(fetches);
-  const jsons = await Promise.all(responses.map((r) => r.json()));
-
-  const allVideoIds: string[] = [];
-  const snippetMap: Record<
-    string,
-    {
-      title: string;
-      channelTitle: string;
-      thumbnails: { high?: { url: string }; default?: { url: string } };
-    }
-  > = {};
-
-  // Process trending (videos endpoint)
-  const trendingData = jsons[0];
-  if (trendingData.items) {
-    for (const item of trendingData.items as Array<{
-      id: string;
-      snippet: {
-        title: string;
-        channelTitle: string;
-        thumbnails: { high?: { url: string }; default?: { url: string } };
-      };
-      contentDetails: { duration: string };
-    }>) {
-      const secs = parseISO8601DurationSeconds(item.contentDetails.duration);
-      if (isMusicVideo(item.snippet.title, secs)) {
-        allVideoIds.push(item.id);
-        snippetMap[item.id] = item.snippet;
-      }
-    }
-  }
-
-  // Process genre searches (search endpoint - need to fetch details)
-  const genreVideoIds: string[] = [];
-  for (let i = 1; i < jsons.length; i++) {
-    const data = jsons[i];
-    if (data.items) {
-      for (const item of data.items as Array<{
-        id?: { videoId?: string };
-        snippet: {
-          title: string;
-          channelTitle: string;
-          thumbnails: { high?: { url: string }; default?: { url: string } };
-        };
-      }>) {
-        if (item.id?.videoId) {
-          genreVideoIds.push(item.id.videoId);
-          snippetMap[item.id.videoId] = item.snippet;
-        }
-      }
-    }
-  }
-
-  if (genreVideoIds.length > 0) {
-    const detailsUrl = `https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${genreVideoIds.join(",")}&key=${apiKey}`;
-    const detailsRes = await fetch(detailsUrl);
-    const detailsData = await detailsRes.json();
-    if (detailsData.items) {
-      for (const item of detailsData.items as Array<{
-        id: string;
-        contentDetails: { duration: string };
-      }>) {
-        const secs = parseISO8601DurationSeconds(item.contentDetails.duration);
-        if (
-          snippetMap[item.id] &&
-          isMusicVideo(snippetMap[item.id].title, secs)
-        ) {
-          allVideoIds.push(item.id);
-        }
-      }
-    }
-  }
-
-  // Deduplicate
-  const seen = new Set<string>();
-  const songs: Song[] = [];
-  for (const id of allVideoIds) {
-    if (seen.has(id)) continue;
-    seen.add(id);
-    const snippet = snippetMap[id];
-    if (!snippet) continue;
-    songs.push({
-      videoId: id,
-      title: snippet.title,
-      channel: snippet.channelTitle,
-      thumbnail:
-        snippet.thumbnails?.high?.url || snippet.thumbnails?.default?.url || "",
-      duration: "",
-    });
-  }
-
-  return songs.slice(0, 20);
-}
 
 interface MeelCardProps {
   song: Song;
@@ -183,7 +52,6 @@ function MeelCard({ song, index, isActive, onNext }: MeelCardProps) {
     }
   };
 
-  // Initialize YT player on this iframe
   useEffect(() => {
     const iframeId = `meel-iframe-${index}`;
 
@@ -215,10 +83,8 @@ function MeelCard({ song, index, isActive, onNext }: MeelCardProps) {
       playerRef.current?.destroy();
       playerRef.current = null;
     };
-    // biome-ignore lint/correctness/useExhaustiveDependencies: onNext captured via stable ref
   }, [index]);
 
-  // Activate/deactivate based on isActive
   useEffect(() => {
     const player = playerRef.current;
     if (!player) return;
@@ -231,7 +97,6 @@ function MeelCard({ song, index, isActive, onNext }: MeelCardProps) {
         // player not ready yet
       }
 
-      // Auto-advance after 45s
       if (autoAdvanceRef.current) clearInterval(autoAdvanceRef.current);
       autoAdvanceRef.current = window.setInterval(() => {
         try {
@@ -461,8 +326,6 @@ export function Meel() {
   const containerRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
 
-  const apiKey = localStorage.getItem("yt_api_key") || "";
-
   const goToNext = useCallback(() => {
     setActiveIndex((prev) => {
       const next = Math.min(prev + 1, tracks.length - 1);
@@ -477,13 +340,17 @@ export function Meel() {
   }, [tracks.length]);
 
   useEffect(() => {
-    if (!apiKey) {
-      setError("no_api_key");
-      setLoading(false);
-      return;
-    }
+    const genres: string[] = (() => {
+      try {
+        const stored = localStorage.getItem("flute_favorite_genres");
+        if (stored) return JSON.parse(stored) as string[];
+      } catch {
+        // ignore
+      }
+      return [];
+    })();
 
-    fetchMeelTracks(apiKey)
+    fetchTrending(genres)
       .then((songs) => {
         setTracks(songs);
         setLoading(false);
@@ -492,9 +359,8 @@ export function Meel() {
         setError(err.message || "Failed to load");
         setLoading(false);
       });
-  }, [apiKey]);
+  }, []);
 
-  // Intersection observer to detect active card
   useEffect(() => {
     if (!containerRef.current || tracks.length === 0) return;
 
@@ -532,34 +398,6 @@ export function Meel() {
         <div className="flex flex-col items-center gap-4">
           <Loader2 className="w-10 h-10 animate-spin text-primary" />
           <p className="text-white/60 text-sm">Loading Meel...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (error === "no_api_key") {
-    return (
-      <div
-        data-ocid="meel.error_state"
-        className="h-screen bg-black flex items-center justify-center px-6"
-      >
-        <div className="text-center space-y-4">
-          <Music2 className="w-16 h-16 text-primary mx-auto" />
-          <h2 className="text-white text-xl font-bold">Set Up Your API Key</h2>
-          <p className="text-white/60 text-sm">
-            To use Meel, set your YouTube API key in Settings.
-          </p>
-          <Button
-            data-ocid="meel.primary_button"
-            className="rounded-full bg-primary text-primary-foreground"
-            onClick={() => {
-              window.dispatchEvent(
-                new CustomEvent("flute-navigate", { detail: "settings" }),
-              );
-            }}
-          >
-            Go to Settings
-          </Button>
         </div>
       </div>
     );

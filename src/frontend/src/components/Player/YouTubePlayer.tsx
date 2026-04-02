@@ -1,53 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useCacheSong, useRecordListening } from "../../hooks/useQueries";
+import { searchVideos } from "../../lib/invidious";
 import { registerSeekCallback, usePlayerStore } from "../../store/playerStore";
-
-const BLOCKED_TITLE_KEYWORDS = ["live", "reaction", "cover", "vlog"];
-
-async function fetchAndPlayRelated(
-  currentSong: { videoId: string; title: string; channel: string },
-  apiKey: string,
-): Promise<void> {
-  try {
-    // relatedToVideoId was deprecated by YouTube in Aug 2023 — use title search instead
-    const query = encodeURIComponent(
-      `${currentSong.title} ${currentSong.channel} official audio`,
-    );
-    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&q=${query}&maxResults=10&key=${apiKey}`;
-    const res = await fetch(url);
-    if (!res.ok) return;
-    const data = await res.json();
-    if (!data.items || data.items.length === 0) return;
-
-    for (const item of data.items as Array<{
-      id?: { videoId?: string };
-      snippet?: {
-        title?: string;
-        channelTitle?: string;
-        thumbnails?: { high?: { url: string }; default?: { url: string } };
-      };
-    }>) {
-      if (!item.id?.videoId) continue;
-      if (item.id.videoId === currentSong.videoId) continue;
-      const title = item.snippet?.title?.toLowerCase() || "";
-      if (BLOCKED_TITLE_KEYWORDS.some((kw) => title.includes(kw))) continue;
-
-      usePlayerStore.getState().playSong({
-        videoId: item.id.videoId,
-        title: item.snippet?.title || "",
-        channel: item.snippet?.channelTitle || "",
-        thumbnail:
-          item.snippet?.thumbnails?.high?.url ||
-          item.snippet?.thumbnails?.default?.url ||
-          "",
-        duration: "",
-      });
-      break;
-    }
-  } catch {
-    // silently fail
-  }
-}
 
 export function YouTubePlayer() {
   const playerRef = useRef<YT.Player | null>(null);
@@ -66,7 +20,6 @@ export function YouTubePlayer() {
   const recordListening = useRecordListening();
   const cacheSong = useCacheSong();
 
-  // Stable refs so YT event handlers don't go stale
   const nextRef = useRef(next);
   nextRef.current = next;
   const setIsPlayingRef = useRef(setIsPlaying);
@@ -78,14 +31,12 @@ export function YouTubePlayer() {
   const recordRef = useRef(recordListening.mutate);
   recordRef.current = recordListening.mutate;
 
-  // Register seek callback
   useEffect(() => {
     registerSeekCallback((seconds: number) => {
       playerRef.current?.seekTo(seconds, true);
     });
   }, []);
 
-  // Load YT API - intentionally runs once on mount
   useEffect(() => {
     const initPlayer = () => {
       if (!containerRef.current) return;
@@ -121,11 +72,17 @@ export function YouTubePlayer() {
                 const isAtEndOfQueue =
                   queueIndex >= queue.length - 1 && currentRepeat !== "all";
                 if (isAtEndOfQueue) {
-                  // Endless Radio: fetch related tracks by title
                   const song = usePlayerStore.getState().currentSong;
-                  const apiKey = localStorage.getItem("yt_api_key") || "";
-                  if (song && apiKey) {
-                    fetchAndPlayRelated(song, apiKey);
+                  if (song) {
+                    searchVideos(`${song.title} ${song.channel}`)
+                      .then((results) => {
+                        const nextSong = results.find(
+                          (r) => r.videoId !== song.videoId,
+                        );
+                        if (nextSong)
+                          usePlayerStore.getState().playSong(nextSong);
+                      })
+                      .catch(() => {});
                   } else {
                     setIsPlayingRef.current(false);
                   }
@@ -160,7 +117,6 @@ export function YouTubePlayer() {
     }
   }, []);
 
-  // Handle song change
   useEffect(() => {
     if (!playerRef.current) return;
     const videoId = currentSong?.videoId ?? null;
@@ -183,7 +139,6 @@ export function YouTubePlayer() {
     }
   }, [currentSong]);
 
-  // Handle play/pause toggle
   useEffect(() => {
     if (!playerRef.current) return;
     const videoId = currentSong?.videoId ?? null;
@@ -195,12 +150,10 @@ export function YouTubePlayer() {
     }
   }, [isPlaying, currentSong?.videoId]);
 
-  // Sync volume
   useEffect(() => {
     playerRef.current?.setVolume(volume * 100);
   }, [volume]);
 
-  // Progress polling
   useEffect(() => {
     if (isPlaying) {
       progressIntervalRef.current = window.setInterval(() => {
