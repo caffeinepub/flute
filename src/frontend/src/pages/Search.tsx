@@ -1,6 +1,7 @@
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertCircle, Search as SearchIcon } from "lucide-react";
+import { AlertCircle, RefreshCw, Search as SearchIcon } from "lucide-react";
 import { motion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import type { Song } from "../backend";
@@ -37,7 +38,11 @@ export function Search() {
       const songs = await searchVideos(q);
       setResults(songs);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Search failed");
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Can't connect to music service. Check your internet and try again.",
+      );
     } finally {
       setLoading(false);
     }
@@ -118,10 +123,24 @@ export function Search() {
       {error && (
         <div
           data-ocid="search.error_state"
-          className="flex items-center gap-2 p-4 rounded-lg bg-destructive/20 text-destructive mb-4"
+          className="flex flex-col items-center gap-3 p-6 rounded-xl bg-destructive/10 border border-destructive/20 text-center mb-4"
         >
-          <AlertCircle className="w-4 h-4 flex-shrink-0" />
-          <span className="text-sm">{error}</span>
+          <AlertCircle className="w-8 h-8 text-destructive" />
+          <div>
+            <p className="text-sm font-medium text-foreground">
+              Connection failed
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">{error}</p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-2 rounded-full border-destructive/40 text-foreground"
+            onClick={() => doSearch(query)}
+          >
+            <RefreshCw className="w-3 h-3" />
+            Try Again
+          </Button>
         </div>
       )}
 

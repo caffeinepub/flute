@@ -72,12 +72,12 @@ export function SongCard({
     );
   };
 
-  const SongActionsMenu = ({ stopProp }: { stopProp?: boolean }) => (
+  const ActionsMenu = ({ stopProp }: { stopProp?: boolean }) => (
     <DropdownMenu>
       <DropdownMenuTrigger
         data-ocid={`song.open_modal_button.${(index ?? 0) + 1}`}
         onClick={stopProp ? (e) => e.stopPropagation() : undefined}
-        className="p-1 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+        className="p-1.5 text-muted-foreground hover:text-foreground transition-colors"
       >
         <MoreHorizontal className="w-4 h-4" />
       </DropdownMenuTrigger>
@@ -182,20 +182,35 @@ export function SongCard({
         <span className="text-xs text-muted-foreground flex-shrink-0">
           {song.duration}
         </span>
+        {/* Like button -- always visible on mobile (opacity-60 base, full on hover/liked) */}
         <button
           type="button"
           data-ocid={`song.toggle.${(index ?? 0) + 1}`}
           onClick={handleLike}
           className={cn(
-            "p-1 opacity-0 group-hover:opacity-100 transition-opacity",
+            "p-1.5 transition-opacity flex-shrink-0",
             isLiked
               ? "opacity-100 text-primary"
-              : "text-muted-foreground hover:text-foreground",
+              : "opacity-60 hover:opacity-100 text-muted-foreground hover:text-foreground",
           )}
         >
           <Heart className={cn("w-4 h-4", isLiked && "fill-current")} />
         </button>
-        <SongActionsMenu stopProp />
+        {/* Quick add-to-queue button -- always visible on mobile */}
+        <button
+          type="button"
+          data-ocid={`song.secondary_button.${(index ?? 0) + 1}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            addToQueue(song);
+            toast.success("Added to queue");
+          }}
+          className="p-1.5 opacity-60 hover:opacity-100 text-muted-foreground hover:text-foreground transition-opacity flex-shrink-0"
+          title="Add to queue"
+        >
+          <ListPlus className="w-4 h-4" />
+        </button>
+        <ActionsMenu stopProp />
       </div>
     );
   }

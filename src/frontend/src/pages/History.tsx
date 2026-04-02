@@ -1,39 +1,64 @@
-import { Skeleton } from "@/components/ui/skeleton";
 import { Clock } from "lucide-react";
 import { motion } from "motion/react";
+import { useEffect, useState } from "react";
 import type { Song } from "../backend";
 import { SongCard } from "../components/SongCard/SongCard";
-import { useAllSongs, useListeningHistory } from "../hooks/useQueries";
+import { getLocalHistory } from "../utils/localHistory";
 
-const SKEL_10 = ["s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9"];
+interface GroupedHistory {
+  label: string;
+  entries: { song: Song; timestamp: number }[];
+}
 
-function formatTimestamp(ts: bigint): string {
-  const ms = Number(ts) / 1_000_000;
-  const date = new Date(ms);
-  if (Number.isNaN(date.getTime())) return "Unknown";
-  return date.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
+function getDateLabel(ts: number): string {
+  const now = new Date();
+  const date = new Date(ts);
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today.getTime() - 86400000);
+  const weekAgo = new Date(today.getTime() - 7 * 86400000);
+
+  const entryDay = new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+  );
+
+  if (entryDay.getTime() === today.getTime()) return "Today";
+  if (entryDay.getTime() === yesterday.getTime()) return "Yesterday";
+  if (entryDay.getTime() >= weekAgo.getTime()) return "This Week";
+  return "Earlier";
+}
+
+function formatTime(ts: number): string {
+  return new Date(ts).toLocaleTimeString("en-US", {
     hour: "2-digit",
     minute: "2-digit",
   });
 }
 
 export function History() {
-  const { data: history = [], isLoading: historyLoading } =
-    useListeningHistory();
-  const { data: allSongs = [], isLoading: songsLoading } = useAllSongs();
+  const [groups, setGroups] = useState<GroupedHistory[]>([]);
 
-  const isLoading = historyLoading || songsLoading;
+  useEffect(() => {
+    const entries = getLocalHistory();
+    const map = new Map<string, { song: Song; timestamp: number }[]>();
+    for (const entry of entries) {
+      const label = getDateLabel(entry.timestamp);
+      if (!map.has(label)) map.set(label, []);
+      map.get(label)!.push(entry);
+    }
 
-  const historySongs: { song: Song; timestamp: bigint }[] = history
-    .map((entry) => {
-      const song = allSongs.find((s) => s.videoId === entry.songId);
-      return song ? { song, timestamp: entry.timestamp } : null;
-    })
-    .filter((x): x is { song: Song; timestamp: bigint } => !!x);
+    const order = ["Today", "Yesterday", "This Week", "Earlier"];
+    const result: GroupedHistory[] = [];
+    for (const label of order) {
+      if (map.has(label)) {
+        result.push({ label, entries: map.get(label)! });
+      }
+    }
+    setGroups(result);
+  }, []);
 
-  const songsForQueue = historySongs.map((x) => x.song);
+  const allSongs = groups.flatMap((g) => g.entries.map((e) => e.song));
 
   return (
     <div className="px-6 py-8">
@@ -44,13 +69,7 @@ export function History() {
         </h1>
       </div>
 
-      {isLoading ? (
-        <div data-ocid="history.loading_state" className="space-y-2">
-          {SKEL_10.map((k) => (
-            <Skeleton key={k} className="h-14 rounded-lg bg-accent" />
-          ))}
-        </div>
-      ) : historySongs.length === 0 ? (
+      {groups.length === 0 ? (
         <motion.div
           data-ocid="history.empty_state"
           initial={{ opacity: 0 }}
@@ -66,27 +85,40 @@ export function History() {
           </p>
         </motion.div>
       ) : (
-        <div className="space-y-1">
-          {historySongs.map(({ song, timestamp }, i) => (
+        <div className="space-y-6">
+          {groups.map((group) => (
             <motion.div
-              key={`${song.videoId}-${timestamp.toString()}`}
-              data-ocid={`history.item.${i + 1}`}
-              initial={{ opacity: 0, y: 5 }}
+              key={group.label}
+              initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: Math.min(i * 0.02, 0.3) }}
-              className="flex items-center gap-2"
             >
-              <div className="flex-1 min-w-0">
-                <SongCard
-                  song={song}
-                  queue={songsForQueue}
-                  index={i}
-                  variant="list"
-                />
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                {group.label}
+              </h2>
+              <div className="space-y-1">
+                {group.entries.map(({ song, timestamp }, i) => (
+                  <motion.div
+                    key={`${song.videoId}-${timestamp}`}
+                    data-ocid={`history.item.${i + 1}`}
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: Math.min(i * 0.02, 0.3) }}
+                    className="flex items-center gap-2"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <SongCard
+                        song={song}
+                        queue={allSongs}
+                        index={i}
+                        variant="list"
+                      />
+                    </div>
+                    <span className="text-xs text-muted-foreground flex-shrink-0 w-14 text-right">
+                      {formatTime(timestamp)}
+                    </span>
+                  </motion.div>
+                ))}
               </div>
-              <span className="text-xs text-muted-foreground flex-shrink-0 w-28 text-right">
-                {formatTimestamp(timestamp)}
-              </span>
             </motion.div>
           ))}
         </div>

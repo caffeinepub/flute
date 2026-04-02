@@ -28,6 +28,22 @@ interface PipedItem {
   type?: string;
 }
 
+interface PipedAudioStream {
+  url: string;
+  bitrate: number;
+  mimeType: string;
+  quality?: string;
+}
+
+interface PipedStreamsResponse {
+  audioStreams: PipedAudioStream[];
+  title?: string;
+  uploader?: string;
+  thumbnailUrl?: string;
+  duration?: number;
+  relatedStreams?: PipedItem[];
+}
+
 function pipedToInvidious(item: PipedItem): InvidiousVideo | null {
   const match = item.url?.match(/[?&]v=([^&]+)/);
   if (!match) return null;
@@ -47,40 +63,71 @@ function pipedToInvidious(item: PipedItem): InvidiousVideo | null {
   };
 }
 
-async function pipedFetch(path: string): Promise<unknown> {
-  for (const instance of PIPED_INSTANCES) {
-    try {
-      const res = await fetch(`${instance}${path}`, {
-        signal: AbortSignal.timeout(6000),
-      });
-      if (res.ok) return res.json();
-    } catch {
-      // try next
-    }
-  }
-  throw new Error("All Piped instances failed");
+// Race all instances in parallel -- first success wins
+export async function pipedFetch(path: string): Promise<unknown> {
+  const results = await Promise.allSettled(
+    PIPED_INSTANCES.map((instance) =>
+      fetch(`${instance}${path}`, { signal: AbortSignal.timeout(8000) }).then(
+        (res) => {
+          if (!res.ok) throw new Error(`${res.status}`);
+          return res.json() as Promise<unknown>;
+        },
+      ),
+    ),
+  );
+  const first = results.find((r) => r.status === "fulfilled");
+  if (first && first.status === "fulfilled") return first.value;
+  throw new Error(
+    "All Piped instances failed. Check your internet connection.",
+  );
 }
 
-// For search, try instances until we get non-empty results
+// For search: race all instances, pick first with non-empty music results
 async function pipedSearchFetch(path: string): Promise<{ items: PipedItem[] }> {
-  let lastError: Error | null = null;
-  for (const instance of PIPED_INSTANCES) {
-    try {
-      const res = await fetch(`${instance}${path}`, {
-        signal: AbortSignal.timeout(6000),
-      });
-      if (!res.ok) continue;
-      const data = (await res.json()) as { items: PipedItem[] };
-      const filtered = (data?.items ?? []).filter(
-        (item) => item.type !== "channel" && item.type !== "playlist",
-      );
-      if (filtered.length > 0) return data;
-    } catch (e) {
-      lastError = e instanceof Error ? e : new Error(String(e));
-    }
-  }
-  if (lastError) throw lastError;
-  return { items: [] };
+  const results = await Promise.allSettled(
+    PIPED_INSTANCES.map((instance) =>
+      fetch(`${instance}${path}`, { signal: AbortSignal.timeout(8000) }).then(
+        async (res) => {
+          if (!res.ok) throw new Error(`${res.status}`);
+          const data = (await res.json()) as { items: PipedItem[] };
+          const filtered = (data?.items ?? []).filter(
+            (item) => item.type !== "channel" && item.type !== "playlist",
+          );
+          if (filtered.length === 0) throw new Error("empty");
+          return data;
+        },
+      ),
+    ),
+  );
+
+  const first = results.find((r) => r.status === "fulfilled");
+  if (first && first.status === "fulfilled")
+    return first.value as { items: PipedItem[] };
+
+  throw new Error(
+    "Can't connect to music service. Check your internet connection and try again.",
+  );
+}
+
+/**
+ * Fetch the best audio stream URL for a video.
+ * Prefers audio/mp4 then audio/webm at highest bitrate.
+ */
+export async function getStreamUrl(videoId: string): Promise<string> {
+  const data = (await pipedFetch(
+    `/streams/${videoId}`,
+  )) as PipedStreamsResponse;
+  const streams = data?.audioStreams ?? [];
+  if (streams.length === 0) throw new Error("No audio streams found");
+
+  // Prefer mp4, then webm, sorted by bitrate descending
+  const sorted = [...streams].sort(
+    (a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0),
+  );
+  const mp4 = sorted.find((s) => s.mimeType?.includes("audio/mp4"));
+  const webm = sorted.find((s) => s.mimeType?.includes("audio/webm"));
+  const best = mp4 ?? webm ?? sorted[0];
+  return best.url;
 }
 
 export function formatDuration(seconds: number): string {
