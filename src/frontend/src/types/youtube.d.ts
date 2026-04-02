@@ -39,6 +39,8 @@ declare global {
       origin?: string;
       rel?: 0 | 1;
       modestbranding?: 0 | 1;
+      playsinline?: 0 | 1;
+      fs?: 0 | 1;
     }
 
     interface PlayerEvents {

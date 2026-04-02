@@ -51,6 +51,8 @@ export function YouTubePlayer() {
           origin: window.location.origin,
           rel: 0,
           modestbranding: 1,
+          playsinline: 1,
+          fs: 0,
         },
         events: {
           onReady: () => {
@@ -116,6 +118,45 @@ export function YouTubePlayer() {
       }
     }
   }, []);
+
+  // Resume playback when tab becomes visible again
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        const { isPlaying: playing } = usePlayerStore.getState();
+        if (playing && playerRef.current) {
+          playerRef.current.playVideo();
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () =>
+      document.removeEventListener("visibilitychange", handleVisibility);
+  }, []);
+
+  // Media Session API for lock screen / notification controls
+  useEffect(() => {
+    if (!currentSong || !("mediaSession" in navigator)) return;
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: currentSong.title,
+      artist: currentSong.channel,
+      artwork: [
+        { src: currentSong.thumbnail, sizes: "512x512", type: "image/jpeg" },
+      ],
+    });
+    navigator.mediaSession.setActionHandler("play", () =>
+      playerRef.current?.playVideo(),
+    );
+    navigator.mediaSession.setActionHandler("pause", () =>
+      playerRef.current?.pauseVideo(),
+    );
+    navigator.mediaSession.setActionHandler("nexttrack", () =>
+      nextRef.current(),
+    );
+    navigator.mediaSession.setActionHandler("previoustrack", () =>
+      playerRef.current?.seekTo(0, true),
+    );
+  }, [currentSong]);
 
   useEffect(() => {
     if (!playerRef.current) return;

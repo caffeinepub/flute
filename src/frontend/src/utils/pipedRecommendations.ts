@@ -3,10 +3,12 @@ import { scoreTrack } from "./moodPrefs";
 
 const PIPED_INSTANCES = [
   "https://pipedapi.kavin.rocks",
-  "https://piped-api.garudalinux.org",
+  "https://api.piped.yt",
+  "https://piped-api.privacy.com.de",
   "https://api.piped.projectsegfau.lt",
   "https://pipedapi.adminforge.de",
-  "https://piped.video/api",
+  "https://piped.drgns.space",
+  "https://api.piped.private.coffee",
 ];
 
 function formatDuration(seconds: number): string {
@@ -15,6 +17,12 @@ function formatDuration(seconds: number): string {
   const s = seconds % 60;
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
+
+const getVideoId = (url: string): string => {
+  if (!url) return "";
+  const match = url.match(/[?&]v=([^&]+)/);
+  return match ? match[1] : "";
+};
 
 interface PipedRelatedStream {
   url: string;
@@ -36,9 +44,9 @@ async function tryFetch(
     const data = await res.json();
     const related: PipedRelatedStream[] = data.relatedStreams || [];
     const songs: Song[] = related
-      .filter((s) => s.duration >= 120 && s.url?.includes("v="))
+      .filter((s) => s.duration >= 60)
       .map((s) => ({
-        videoId: s.url.split("v=")[1]?.split("&")[0] || "",
+        videoId: getVideoId(s.url),
         title: s.title,
         channel: s.uploaderName,
         thumbnail: s.thumbnail,
@@ -50,7 +58,7 @@ async function tryFetch(
       (a, b) => scoreTrack(b.title, b.channel) - scoreTrack(a.title, a.channel),
     );
 
-    return songs.slice(0, 10);
+    return songs.slice(0, 15);
   } catch {
     return null;
   }

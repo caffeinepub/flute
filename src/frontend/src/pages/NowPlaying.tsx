@@ -3,15 +3,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 import {
-  ArrowDown,
-  ArrowUp,
   ChevronDown,
+  ChevronUp,
+  GripVertical,
   Heart,
   ListMusic,
   Music2,
   Pause,
   Play,
   Plus,
+  RefreshCw,
   Repeat,
   Repeat1,
   Shuffle,
@@ -24,7 +25,7 @@ import {
   X,
 } from "lucide-react";
 import { motion } from "motion/react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { Song } from "../backend";
 import {
@@ -82,6 +83,7 @@ export function NowPlaying() {
 
   const [relatedSongs, setRelatedSongs] = useState<Song[]>([]);
   const [relatedLoading, setRelatedLoading] = useState(false);
+  const [relatedError, setRelatedError] = useState(false);
   const [activeTab, setActiveTab] = useState<"lyrics" | "queue" | "related">(
     "lyrics",
   );
@@ -108,13 +110,15 @@ export function NowPlaying() {
 
   const currentVideoId = currentSong?.videoId;
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally keyed only on videoId; queue/queueIndex read via getState() to avoid stale closure
-  useEffect(() => {
-    if (!currentVideoId) return;
+  const loadRelated = useCallback((videoId: string) => {
     setRelatedLoading(true);
-    fetchRelatedSongs(currentVideoId).then((songs) => {
+    setRelatedError(false);
+    fetchRelatedSongs(videoId).then((songs) => {
       setRelatedSongs(songs);
       setRelatedLoading(false);
+      if (songs.length === 0) {
+        setRelatedError(true);
+      }
       const state = usePlayerStore.getState();
       const songsAhead = state.queue.length - (state.queueIndex + 1);
       if (songsAhead < 3) {
@@ -127,6 +131,12 @@ export function NowPlaying() {
         }
       }
     });
+  }, []);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally keyed only on videoId
+  useEffect(() => {
+    if (!currentVideoId) return;
+    loadRelated(currentVideoId);
   }, [currentVideoId]);
 
   const handleLike = () => {
@@ -382,7 +392,7 @@ export function NowPlaying() {
               </div>
             ) : (
               <ScrollArea className="h-[60vh]">
-                <div className="space-y-1 pr-2">
+                <div className="space-y-2 pr-2">
                   {queue.map((song, i) => {
                     const isCurrent =
                       song.videoId === currentSong.videoId && i === queueIndex;
@@ -391,31 +401,32 @@ export function NowPlaying() {
                         key={`${song.videoId}-${i}`}
                         data-ocid={`queue.item.${i + 1}`}
                         className={cn(
-                          "flex items-center gap-2 px-3 py-2 rounded-lg transition-colors",
+                          "flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors",
                           isCurrent
-                            ? "bg-primary/10 border border-primary/20"
+                            ? "bg-primary/10 border-l-2 border-primary"
                             : "hover:bg-accent",
                         )}
                       >
-                        {/* Reorder arrows */}
-                        <div className="flex flex-col gap-0.5 flex-shrink-0">
+                        {/* Modern drag handle + reorder */}
+                        <div className="flex flex-col items-center gap-0.5 flex-shrink-0">
+                          <GripVertical className="w-4 h-4 text-muted-foreground/40 mb-0.5" />
                           <button
                             type="button"
                             data-ocid={`queue.edit_button.${i + 1}`}
                             disabled={i === 0}
                             onClick={() => reorderQueue(i, i - 1)}
-                            className="text-muted-foreground hover:text-foreground disabled:opacity-20 transition-colors"
+                            className="w-6 h-6 rounded-full bg-accent hover:bg-primary/20 flex items-center justify-center text-muted-foreground hover:text-primary disabled:opacity-20 transition-colors"
                           >
-                            <ArrowUp className="w-3.5 h-3.5" />
+                            <ChevronUp className="w-3.5 h-3.5" />
                           </button>
                           <button
                             type="button"
                             data-ocid={`queue.edit_button.${i + 1}`}
                             disabled={i === queue.length - 1}
                             onClick={() => reorderQueue(i, i + 1)}
-                            className="text-muted-foreground hover:text-foreground disabled:opacity-20 transition-colors"
+                            className="w-6 h-6 rounded-full bg-accent hover:bg-primary/20 flex items-center justify-center text-muted-foreground hover:text-primary disabled:opacity-20 transition-colors"
                           >
-                            <ArrowDown className="w-3.5 h-3.5" />
+                            <ChevronDown className="w-3.5 h-3.5" />
                           </button>
                         </div>
 
@@ -430,7 +441,7 @@ export function NowPlaying() {
                           <img
                             src={song.thumbnail}
                             alt={song.title}
-                            className="w-10 h-10 rounded object-cover flex-shrink-0"
+                            className="w-10 h-10 rounded-lg object-cover flex-shrink-0"
                           />
                           <div className="flex-1 min-w-0">
                             <p
@@ -448,30 +459,30 @@ export function NowPlaying() {
                         </button>
 
                         {/* Feedback + remove */}
-                        <div className="flex items-center gap-1 flex-shrink-0">
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
                           <button
                             type="button"
                             data-ocid={`queue.toggle.${i + 1}`}
-                            title="Listened"
+                            title="Listened — play more like this"
                             onClick={() => handleListened(song)}
-                            className="flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-green-500/10 text-green-400 hover:bg-green-500/20 transition-colors"
+                            className="w-8 h-8 rounded-full bg-green-500/10 text-green-400 hover:bg-green-500/25 hover:text-green-300 flex items-center justify-center transition-colors"
                           >
-                            <ThumbsUp className="w-3 h-3" />
+                            <ThumbsUp className="w-3.5 h-3.5" />
                           </button>
                           <button
                             type="button"
                             data-ocid={`queue.delete_button.${i + 1}`}
                             title="Not interested"
                             onClick={() => handleNotInterested(song, i)}
-                            className="flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
+                            className="w-8 h-8 rounded-full bg-red-500/10 text-red-400 hover:bg-red-500/25 hover:text-red-300 flex items-center justify-center transition-colors"
                           >
-                            <ThumbsDown className="w-3 h-3" />
+                            <ThumbsDown className="w-3.5 h-3.5" />
                           </button>
                           <button
                             type="button"
                             data-ocid={`queue.close_button.${i + 1}`}
                             onClick={() => removeFromQueue(i)}
-                            className="p-1 text-muted-foreground hover:text-foreground transition-colors"
+                            className="w-8 h-8 rounded-full bg-accent hover:bg-red-500/20 hover:text-red-400 text-muted-foreground flex items-center justify-center transition-colors"
                           >
                             <X className="w-3.5 h-3.5" />
                           </button>
@@ -503,12 +514,25 @@ export function NowPlaying() {
             ) : relatedSongs.length === 0 ? (
               <div
                 data-ocid="nowplaying.empty_state"
-                className="text-center py-12"
+                className="text-center py-12 space-y-4"
               >
-                <Music2 className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
+                <Music2 className="w-12 h-12 text-muted-foreground mx-auto" />
                 <p className="text-muted-foreground text-sm">
-                  No similar songs found
+                  {relatedError
+                    ? "Couldn't load similar songs"
+                    : "No similar songs found"}
                 </p>
+                {currentVideoId && (
+                  <button
+                    type="button"
+                    data-ocid="related.secondary_button"
+                    onClick={() => loadRelated(currentVideoId)}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-accent hover:bg-primary/20 text-sm font-medium text-muted-foreground hover:text-primary transition-colors"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    Retry
+                  </button>
+                )}
               </div>
             ) : (
               <ScrollArea className="h-[50vh]">
