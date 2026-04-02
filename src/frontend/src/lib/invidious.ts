@@ -1,13 +1,14 @@
 import type { Song } from "../backend";
 
 // Piped is a CORS-enabled YouTube alternative API
-// Invidious public instances have disabled CORS/API access
 const PIPED_INSTANCES = [
   "https://pipedapi.kavin.rocks",
-  "https://api.piped.private.coffee",
+  "https://api.piped.yt",
   "https://piped-api.privacy.com.de",
   "https://api.piped.projectsegfau.lt",
   "https://pipedapi.adminforge.de",
+  "https://piped.drgns.space",
+  "https://api.piped.private.coffee",
 ];
 
 export interface InvidiousVideo {
@@ -50,7 +51,7 @@ async function pipedFetch(path: string): Promise<unknown> {
   for (const instance of PIPED_INSTANCES) {
     try {
       const res = await fetch(`${instance}${path}`, {
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(6000),
       });
       if (res.ok) return res.json();
     } catch {
@@ -58,6 +59,28 @@ async function pipedFetch(path: string): Promise<unknown> {
     }
   }
   throw new Error("All Piped instances failed");
+}
+
+// For search, try instances until we get non-empty results
+async function pipedSearchFetch(path: string): Promise<{ items: PipedItem[] }> {
+  let lastError: Error | null = null;
+  for (const instance of PIPED_INSTANCES) {
+    try {
+      const res = await fetch(`${instance}${path}`, {
+        signal: AbortSignal.timeout(6000),
+      });
+      if (!res.ok) continue;
+      const data = (await res.json()) as { items: PipedItem[] };
+      const filtered = (data?.items ?? []).filter(
+        (item) => item.type !== "channel" && item.type !== "playlist",
+      );
+      if (filtered.length > 0) return data;
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+    }
+  }
+  if (lastError) throw lastError;
+  return { items: [] };
 }
 
 export function formatDuration(seconds: number): string {
@@ -92,9 +115,7 @@ function toSong(v: InvidiousVideo): Song | null {
 
 export async function searchVideos(query: string): Promise<Song[]> {
   const q = encodeURIComponent(`${query} official audio`);
-  const data = (await pipedFetch(`/search?q=${q}&filter=videos`)) as {
-    items: PipedItem[];
-  };
+  const data = await pipedSearchFetch(`/search?q=${q}&filter=videos`);
 
   const items = data?.items ?? [];
   return items
