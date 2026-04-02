@@ -28,6 +28,7 @@ interface PlayerState {
   prev: () => void;
   addToQueue: (song: Song) => void;
   removeFromQueue: (index: number) => void;
+  reorderQueue: (fromIndex: number, toIndex: number) => void;
   setProgress: (progress: number) => void;
   setDuration: (duration: number) => void;
   setVolume: (volume: number) => void;
@@ -120,6 +121,19 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         index < s.queueIndex
           ? s.queueIndex - 1
           : Math.min(s.queueIndex, newQueue.length - 1);
+      return { queue: newQueue, queueIndex: Math.max(0, newIdx) };
+    });
+  },
+
+  reorderQueue: (fromIndex: number, toIndex: number) => {
+    set((s) => {
+      const newQueue = [...s.queue];
+      const [removed] = newQueue.splice(fromIndex, 1);
+      newQueue.splice(toIndex, 0, removed);
+      let newIdx = s.queueIndex;
+      if (fromIndex === s.queueIndex) newIdx = toIndex;
+      else if (fromIndex < s.queueIndex && toIndex >= s.queueIndex) newIdx--;
+      else if (fromIndex > s.queueIndex && toIndex <= s.queueIndex) newIdx++;
       return { queue: newQueue, queueIndex: Math.max(0, newIdx) };
     });
   },

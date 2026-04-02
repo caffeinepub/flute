@@ -3,22 +3,29 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 import {
+  ArrowDown,
+  ArrowUp,
   ChevronDown,
   Heart,
   ListMusic,
   Music2,
   Pause,
   Play,
+  Plus,
   Repeat,
   Repeat1,
   Shuffle,
   SkipBack,
   SkipForward,
+  ThumbsDown,
+  ThumbsUp,
   Volume2,
   VolumeX,
+  X,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import type { Song } from "../backend";
 import {
   useCacheLyrics,
@@ -29,6 +36,12 @@ import {
 } from "../hooks/useQueries";
 import { useNavigationStore } from "../store/navigationStore";
 import { usePlayerStore } from "../store/playerStore";
+import {
+  classifyMood,
+  reinforceNegative,
+  reinforcePositive,
+} from "../utils/moodPrefs";
+import { fetchRelatedSongs } from "../utils/pipedRecommendations";
 
 const SKEL_5 = ["rs0", "rs1", "rs2", "rs3", "rs4"];
 
@@ -37,46 +50,6 @@ function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
-async function fetchRelatedSongs(
-  videoId: string,
-  apiKey: string,
-): Promise<Song[]> {
-  if (!apiKey) return [];
-  try {
-    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&relatedToVideoId=${videoId}&key=${apiKey}&maxResults=10`;
-    const res = await fetch(url);
-    if (!res.ok) return [];
-    const data = await res.json();
-    if (!data.items) return [];
-    return (
-      data.items as {
-        id?: { videoId?: string };
-        snippet: {
-          title: string;
-          channelTitle: string;
-          thumbnails: { high?: { url: string }; default?: { url: string } };
-        };
-      }[]
-    )
-      .filter((item) => item.id?.videoId)
-      .map(
-        (item) =>
-          ({
-            videoId: item.id!.videoId!,
-            title: item.snippet.title,
-            channel: item.snippet.channelTitle,
-            thumbnail:
-              item.snippet.thumbnails?.high?.url ||
-              item.snippet.thumbnails?.default?.url ||
-              "",
-            duration: "0:00",
-          }) satisfies Song,
-      );
-  } catch {
-    return [];
-  }
 }
 
 export function NowPlaying() {
@@ -89,6 +62,7 @@ export function NowPlaying() {
     shuffle,
     repeat,
     queue,
+    queueIndex,
     togglePlay,
     next,
     prev,
@@ -96,6 +70,9 @@ export function NowPlaying() {
     setVolume,
     toggleShuffle,
     setRepeat,
+    addToQueue,
+    removeFromQueue,
+    reorderQueue,
   } = usePlayerStore();
   const { goBack } = useNavigationStore();
   const { data: likedSongs = [] } = useLikedSongs();
@@ -121,7 +98,6 @@ export function NowPlaying() {
 
   const lyrics = currentSong?.lyrics || lyricsData;
 
-  // Stable refs for mutations to avoid exhaustive deps issues
   const cacheLyricsRef = useRef(cacheLyrics.mutate);
   cacheLyricsRef.current = cacheLyrics.mutate;
 
@@ -130,16 +106,28 @@ export function NowPlaying() {
     cacheLyricsRef.current({ songId: currentSong.videoId, lyrics: lyricsData });
   }, [lyricsData, currentSong]);
 
+  const currentVideoId = currentSong?.videoId;
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally keyed only on videoId; queue/queueIndex read via getState() to avoid stale closure
   useEffect(() => {
-    if (!currentSong) return;
-    const apiKey = localStorage.getItem("yt_api_key") || "";
-    if (!apiKey) return;
+    if (!currentVideoId) return;
     setRelatedLoading(true);
-    fetchRelatedSongs(currentSong.videoId, apiKey).then((songs) => {
+    fetchRelatedSongs(currentVideoId).then((songs) => {
       setRelatedSongs(songs);
       setRelatedLoading(false);
+      const state = usePlayerStore.getState();
+      const songsAhead = state.queue.length - (state.queueIndex + 1);
+      if (songsAhead < 3) {
+        const existingIds = new Set(state.queue.map((s) => s.videoId));
+        const toAdd = songs
+          .filter((s) => !existingIds.has(s.videoId))
+          .slice(0, 5);
+        for (const s of toAdd) {
+          state.addToQueue(s);
+        }
+      }
     });
-  }, [currentSong]);
+  }, [currentVideoId]);
 
   const handleLike = () => {
     if (!currentSong) return;
@@ -154,6 +142,17 @@ export function NowPlaying() {
     if (repeat === "none") setRepeat("all");
     else if (repeat === "all") setRepeat("one");
     else setRepeat("none");
+  };
+
+  const handleListened = (song: Song) => {
+    reinforcePositive(classifyMood(song.title), song.channel);
+    toast.success("Got it! We'll play more like this 👍");
+  };
+
+  const handleNotInterested = (song: Song, index: number) => {
+    reinforceNegative(classifyMood(song.title), song.channel);
+    removeFromQueue(index);
+    toast("Removed from queue", { icon: "👎" });
   };
 
   if (!currentSong) {
@@ -319,7 +318,7 @@ export function NowPlaying() {
         </div>
       </div>
 
-      {/* Right: Lyrics/Queue/Related */}
+      {/* Right: Lyrics / Queue / Similar Songs */}
       <div className="flex-1 min-w-0">
         <div className="flex gap-1 mb-6 bg-accent rounded-xl p-1 w-fit">
           {(["lyrics", "queue", "related"] as const).map((tab) => (
@@ -342,6 +341,7 @@ export function NowPlaying() {
           ))}
         </div>
 
+        {/* Lyrics */}
         {activeTab === "lyrics" && (
           <div data-ocid="nowplaying.panel">
             {lyricsLoading ? (
@@ -369,6 +369,7 @@ export function NowPlaying() {
           </div>
         )}
 
+        {/* Queue */}
         {activeTab === "queue" && (
           <div data-ocid="nowplaying.panel">
             {queue.length === 0 ? (
@@ -380,56 +381,118 @@ export function NowPlaying() {
                 <p className="text-muted-foreground">Queue is empty</p>
               </div>
             ) : (
-              <ScrollArea className="h-[50vh]">
-                <div className="space-y-1">
-                  {queue.map((song, i) => (
-                    <button
-                      key={song.videoId}
-                      type="button"
-                      data-ocid={`queue.item.${i + 1}`}
-                      className={cn(
-                        "w-full flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors hover:bg-accent text-left",
-                        song.videoId === currentSong.videoId && "bg-primary/10",
-                      )}
-                      onClick={() =>
-                        usePlayerStore.getState().playSong(song, queue)
-                      }
-                    >
-                      <img
-                        src={song.thumbnail}
-                        alt={song.title}
-                        className="w-10 h-10 rounded object-cover"
-                      />
-                      <div className="flex-1 min-w-0">
-                        <p
-                          className={cn(
-                            "text-sm font-medium truncate",
-                            song.videoId === currentSong.videoId
-                              ? "text-primary"
-                              : "text-foreground",
-                          )}
+              <ScrollArea className="h-[60vh]">
+                <div className="space-y-1 pr-2">
+                  {queue.map((song, i) => {
+                    const isCurrent =
+                      song.videoId === currentSong.videoId && i === queueIndex;
+                    return (
+                      <div
+                        key={`${song.videoId}-${i}`}
+                        data-ocid={`queue.item.${i + 1}`}
+                        className={cn(
+                          "flex items-center gap-2 px-3 py-2 rounded-lg transition-colors",
+                          isCurrent
+                            ? "bg-primary/10 border border-primary/20"
+                            : "hover:bg-accent",
+                        )}
+                      >
+                        {/* Reorder arrows */}
+                        <div className="flex flex-col gap-0.5 flex-shrink-0">
+                          <button
+                            type="button"
+                            data-ocid={`queue.edit_button.${i + 1}`}
+                            disabled={i === 0}
+                            onClick={() => reorderQueue(i, i - 1)}
+                            className="text-muted-foreground hover:text-foreground disabled:opacity-20 transition-colors"
+                          >
+                            <ArrowUp className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            data-ocid={`queue.edit_button.${i + 1}`}
+                            disabled={i === queue.length - 1}
+                            onClick={() => reorderQueue(i, i + 1)}
+                            className="text-muted-foreground hover:text-foreground disabled:opacity-20 transition-colors"
+                          >
+                            <ArrowDown className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        {/* Thumbnail + info */}
+                        <button
+                          type="button"
+                          className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                          onClick={() =>
+                            usePlayerStore.getState().playSong(song, queue)
+                          }
                         >
-                          {song.title}
-                        </p>
-                        <p className="text-xs text-muted-foreground truncate">
-                          {song.channel}
-                        </p>
+                          <img
+                            src={song.thumbnail}
+                            alt={song.title}
+                            className="w-10 h-10 rounded object-cover flex-shrink-0"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p
+                              className={cn(
+                                "text-sm font-medium truncate",
+                                isCurrent ? "text-primary" : "text-foreground",
+                              )}
+                            >
+                              {song.title}
+                            </p>
+                            <p className="text-xs text-muted-foreground truncate">
+                              {song.channel}
+                            </p>
+                          </div>
+                        </button>
+
+                        {/* Feedback + remove */}
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <button
+                            type="button"
+                            data-ocid={`queue.toggle.${i + 1}`}
+                            title="Listened"
+                            onClick={() => handleListened(song)}
+                            className="flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-green-500/10 text-green-400 hover:bg-green-500/20 transition-colors"
+                          >
+                            <ThumbsUp className="w-3 h-3" />
+                          </button>
+                          <button
+                            type="button"
+                            data-ocid={`queue.delete_button.${i + 1}`}
+                            title="Not interested"
+                            onClick={() => handleNotInterested(song, i)}
+                            className="flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
+                          >
+                            <ThumbsDown className="w-3 h-3" />
+                          </button>
+                          <button
+                            type="button"
+                            data-ocid={`queue.close_button.${i + 1}`}
+                            onClick={() => removeFromQueue(i)}
+                            className="p-1 text-muted-foreground hover:text-foreground transition-colors"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
-                    </button>
-                  ))}
+                    );
+                  })}
                 </div>
               </ScrollArea>
             )}
           </div>
         )}
 
+        {/* Similar Songs */}
         {activeTab === "related" && (
           <div data-ocid="nowplaying.panel">
             {relatedLoading ? (
               <div data-ocid="nowplaying.loading_state" className="space-y-3">
                 {SKEL_5.map((k) => (
                   <div key={k} className="flex items-center gap-3">
-                    <Skeleton className="w-12 h-12 rounded bg-accent" />
+                    <Skeleton className="w-12 h-12 rounded bg-accent flex-shrink-0" />
                     <div className="flex-1 space-y-2">
                       <Skeleton className="h-3 w-full bg-accent" />
                       <Skeleton className="h-3 w-2/3 bg-accent" />
@@ -444,25 +507,25 @@ export function NowPlaying() {
               >
                 <Music2 className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
                 <p className="text-muted-foreground text-sm">
-                  {localStorage.getItem("yt_api_key")
-                    ? "No related songs found"
-                    : "Set an API key in Settings to see related songs"}
+                  No similar songs found
                 </p>
               </div>
             ) : (
               <ScrollArea className="h-[50vh]">
                 <div className="space-y-1">
                   {relatedSongs.map((song, i) => (
-                    <button
+                    <div
                       key={song.videoId}
-                      type="button"
                       data-ocid={`related.item.${i + 1}`}
-                      className="w-full flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer hover:bg-accent transition-colors group text-left"
-                      onClick={() =>
-                        usePlayerStore.getState().playSong(song, relatedSongs)
-                      }
+                      className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-accent transition-colors group"
                     >
-                      <div className="relative flex-shrink-0">
+                      <button
+                        type="button"
+                        className="relative flex-shrink-0"
+                        onClick={() =>
+                          usePlayerStore.getState().playSong(song, relatedSongs)
+                        }
+                      >
                         <img
                           src={song.thumbnail}
                           alt={song.title}
@@ -471,16 +534,34 @@ export function NowPlaying() {
                         <div className="absolute inset-0 bg-black/50 rounded opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                           <Play className="w-4 h-4 text-white fill-white" />
                         </div>
-                      </div>
-                      <div className="flex-1 min-w-0">
+                      </button>
+                      <button
+                        type="button"
+                        className="flex-1 min-w-0 text-left"
+                        onClick={() =>
+                          usePlayerStore.getState().playSong(song, relatedSongs)
+                        }
+                      >
                         <p className="text-sm font-medium text-foreground truncate">
                           {song.title}
                         </p>
                         <p className="text-xs text-muted-foreground truncate">
                           {song.channel}
                         </p>
-                      </div>
-                    </button>
+                      </button>
+                      <button
+                        type="button"
+                        data-ocid={`related.secondary_button.${i + 1}`}
+                        title="Add to queue"
+                        onClick={() => {
+                          addToQueue(song);
+                          toast.success("Added to queue");
+                        }}
+                        className="flex-shrink-0 w-7 h-7 rounded-full bg-accent hover:bg-primary/20 text-muted-foreground hover:text-primary flex items-center justify-center transition-colors"
+                      >
+                        <Plus className="w-4 h-4" />
+                      </button>
+                    </div>
                   ))}
                 </div>
               </ScrollArea>
