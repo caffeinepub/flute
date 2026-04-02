@@ -5,6 +5,7 @@ import {
   Check,
   LogOut,
   Palette,
+  RefreshCw,
   Settings as SettingsIcon,
   User,
 } from "lucide-react";
@@ -49,19 +50,23 @@ export function Settings() {
     toast.success(`Theme changed to ${THEMES[color].label}`);
   };
 
+  const handleRefresh = () => {
+    window.location.reload();
+  };
+
   return (
-    <div className="px-6 py-8 max-w-2xl">
+    <div className="px-4 py-8 max-w-2xl">
       <div className="flex items-center gap-3 mb-8">
         <SettingsIcon className="w-6 h-6 text-primary" />
         <h1 className="text-2xl font-bold text-foreground">Settings</h1>
       </div>
 
-      <div className="space-y-8">
+      <div className="space-y-6">
         {/* Profile */}
         <motion.section
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-card rounded-xl p-6 shadow-card"
+          className="bg-card rounded-xl p-5 shadow-card"
         >
           <div className="flex items-center gap-2 mb-4">
             <User className="w-5 h-5 text-primary" />
@@ -103,19 +108,19 @@ export function Settings() {
         <motion.section
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="bg-card rounded-xl p-6 shadow-card"
+          transition={{ delay: 0.05 }}
+          className="bg-card rounded-xl p-5 shadow-card"
         >
-          <div className="flex items-center gap-2 mb-4">
+          <div className="flex items-center gap-2 mb-2">
             <Palette className="w-5 h-5 text-primary" />
             <h2 className="text-lg font-semibold text-foreground">
               Accent Color
             </h2>
           </div>
-          <p className="text-sm text-muted-foreground mb-5">
+          <p className="text-sm text-muted-foreground mb-4">
             Choose the accent color used throughout the app.
           </p>
-          <div className="flex flex-wrap gap-3">
+          <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap">
             {(Object.keys(THEMES) as ThemeColor[]).map((color) => {
               const isActive = activeTheme === color;
               return (
@@ -123,7 +128,7 @@ export function Settings() {
                   key={color}
                   type="button"
                   onClick={() => handleThemeChange(color)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-full border transition-all text-sm font-medium ${
+                  className={`flex items-center gap-2 px-3 py-2 rounded-full border transition-all text-sm font-medium ${
                     isActive
                       ? "border-primary bg-primary/15 text-primary"
                       : "border-border text-muted-foreground hover:border-foreground/40 hover:text-foreground"
@@ -133,20 +138,40 @@ export function Settings() {
                     className="w-4 h-4 rounded-full shrink-0"
                     style={{ background: THEMES[color].swatch }}
                   />
-                  {THEMES[color].label}
-                  {isActive && <Check className="w-3 h-3" />}
+                  <span className="truncate">{THEMES[color].label}</span>
+                  {isActive && <Check className="w-3 h-3 shrink-0" />}
                 </button>
               );
             })}
           </div>
         </motion.section>
 
+        {/* Refresh */}
+        <motion.section
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="bg-card rounded-xl p-5 shadow-card"
+        >
+          <Button
+            variant="outline"
+            className="w-full border-border text-foreground hover:bg-accent gap-2"
+            onClick={handleRefresh}
+          >
+            <RefreshCw className="w-4 h-4" />
+            Refresh App
+          </Button>
+          <p className="text-xs text-muted-foreground mt-2 text-center">
+            Reloads the app to apply all changes.
+          </p>
+        </motion.section>
+
         {/* Sign Out */}
         <motion.section
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="bg-card rounded-xl p-6 shadow-card"
+          transition={{ delay: 0.15 }}
+          className="bg-card rounded-xl p-5 shadow-card"
         >
           <Button
             data-ocid="settings.delete_button"

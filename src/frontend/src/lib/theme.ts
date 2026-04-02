@@ -1,18 +1,23 @@
 // OKLCH hue values for each theme
-// Format: [lightness, chroma, hue]
 export type ThemeColor =
   | "green"
   | "red"
   | "violet"
   | "blue"
   | "orange"
-  | "pink";
+  | "pink"
+  | "yellow"
+  | "cyan"
+  | "teal"
+  | "rose"
+  | "indigo"
+  | "amber";
 
 interface ThemeConfig {
   label: string;
   primary: [number, number, number]; // [L, C, H]
   ring: [number, number, number];
-  swatch: string; // for display in picker
+  swatch: string;
 }
 
 export const THEMES: Record<ThemeColor, ThemeConfig> = {
@@ -51,6 +56,42 @@ export const THEMES: Record<ThemeColor, ThemeConfig> = {
     primary: [0.7, 0.2, 340],
     ring: [0.7, 0.2, 340],
     swatch: "oklch(0.7 0.2 340)",
+  },
+  yellow: {
+    label: "Yellow",
+    primary: [0.8, 0.18, 90],
+    ring: [0.8, 0.18, 90],
+    swatch: "oklch(0.8 0.18 90)",
+  },
+  cyan: {
+    label: "Cyan",
+    primary: [0.72, 0.17, 200],
+    ring: [0.72, 0.17, 200],
+    swatch: "oklch(0.72 0.17 200)",
+  },
+  teal: {
+    label: "Teal",
+    primary: [0.7, 0.16, 175],
+    ring: [0.7, 0.16, 175],
+    swatch: "oklch(0.7 0.16 175)",
+  },
+  rose: {
+    label: "Rose",
+    primary: [0.67, 0.22, 10],
+    ring: [0.67, 0.22, 10],
+    swatch: "oklch(0.67 0.22 10)",
+  },
+  indigo: {
+    label: "Indigo",
+    primary: [0.65, 0.22, 260],
+    ring: [0.65, 0.22, 260],
+    swatch: "oklch(0.65 0.22 260)",
+  },
+  amber: {
+    label: "Amber",
+    primary: [0.75, 0.2, 65],
+    ring: [0.75, 0.2, 65],
+    swatch: "oklch(0.75 0.2 65)",
   },
 };
 

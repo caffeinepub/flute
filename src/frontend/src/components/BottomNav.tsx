@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { BookOpen, House, Music, Search, Sparkles } from "lucide-react";
+import { BookOpen, House, Search, Settings, Sparkles } from "lucide-react";
 import { type Page, useNavigationStore } from "../store/navigationStore";
 
 const NAV_ITEMS: { label: string; page: Page; icon: React.ReactNode }[] = [
@@ -8,9 +8,9 @@ const NAV_ITEMS: { label: string; page: Page; icon: React.ReactNode }[] = [
   { label: "Meel", page: "meel", icon: <Sparkles className="w-5 h-5" /> },
   { label: "Library", page: "library", icon: <BookOpen className="w-5 h-5" /> },
   {
-    label: "Now Playing",
-    page: "nowplaying",
-    icon: <Music className="w-5 h-5" />,
+    label: "Settings",
+    page: "settings",
+    icon: <Settings className="w-5 h-5" />,
   },
 ];
 
