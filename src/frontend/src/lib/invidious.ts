@@ -1,9 +1,13 @@
 import type { Song } from "../backend";
 
-const INSTANCES = [
-  "https://inv.nadeko.net",
-  "https://invidious.privacydev.net",
-  "https://yt.artemislena.eu",
+// Piped is a CORS-enabled YouTube alternative API
+// Invidious public instances have disabled CORS/API access
+const PIPED_INSTANCES = [
+  "https://pipedapi.kavin.rocks",
+  "https://api.piped.private.coffee",
+  "https://piped-api.privacy.com.de",
+  "https://api.piped.projectsegfau.lt",
+  "https://pipedapi.adminforge.de",
 ];
 
 export interface InvidiousVideo {
@@ -14,8 +18,36 @@ export interface InvidiousVideo {
   videoThumbnails: Array<{ quality: string; url: string }>;
 }
 
-async function invidiousFetch(path: string): Promise<unknown> {
-  for (const instance of INSTANCES) {
+interface PipedItem {
+  url: string;
+  title: string;
+  uploaderName: string;
+  duration: number;
+  thumbnail: string;
+  type?: string;
+}
+
+function pipedToInvidious(item: PipedItem): InvidiousVideo | null {
+  const match = item.url?.match(/[?&]v=([^&]+)/);
+  if (!match) return null;
+  const videoId = match[1];
+  return {
+    videoId,
+    title: item.title || "",
+    author: item.uploaderName || "",
+    lengthSeconds: item.duration || 0,
+    videoThumbnails: [
+      {
+        quality: "high",
+        url:
+          item.thumbnail || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+      },
+    ],
+  };
+}
+
+async function pipedFetch(path: string): Promise<unknown> {
+  for (const instance of PIPED_INSTANCES) {
     try {
       const res = await fetch(`${instance}${path}`, {
         signal: AbortSignal.timeout(8000),
@@ -25,7 +57,7 @@ async function invidiousFetch(path: string): Promise<unknown> {
       // try next
     }
   }
-  throw new Error("All Invidious instances failed");
+  throw new Error("All Piped instances failed");
 }
 
 export function formatDuration(seconds: number): string {
@@ -37,9 +69,9 @@ export function formatDuration(seconds: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-const BLOCKED = ["live", "reaction", "cover", "vlog"];
+const BLOCKED = ["live", "reaction", "vlog"];
 function isMusic(title: string, secs: number): boolean {
-  if (secs < 120) return false;
+  if (secs < 90) return false;
   const lower = title.toLowerCase();
   return !BLOCKED.some((kw) => lower.includes(kw));
 }
@@ -52,50 +84,60 @@ function toSong(v: InvidiousVideo): Song | null {
     videoId: v.videoId,
     title: v.title,
     channel: v.author,
-    thumbnail: thumb?.url || "",
+    thumbnail:
+      thumb?.url || `https://i.ytimg.com/vi/${v.videoId}/hqdefault.jpg`,
     duration: formatDuration(v.lengthSeconds),
   };
 }
 
 export async function searchVideos(query: string): Promise<Song[]> {
   const q = encodeURIComponent(`${query} official audio`);
-  const data = (await invidiousFetch(
-    `/api/v1/search?q=${q}&type=video&maxResults=20`,
-  )) as InvidiousVideo[];
-  return data
-    .filter((v): v is InvidiousVideo => !!v.videoId)
-    .map(toSong)
+  const data = (await pipedFetch(`/search?q=${q}&filter=videos`)) as {
+    items: PipedItem[];
+  };
+
+  const items = data?.items ?? [];
+  return items
+    .filter((item) => item.type !== "channel" && item.type !== "playlist")
+    .map((item) => {
+      const inv = pipedToInvidious(item);
+      return inv ? toSong(inv) : null;
+    })
     .filter((s): s is Song => s !== null)
     .slice(0, 20);
 }
 
 export async function fetchTrending(genres: string[] = []): Promise<Song[]> {
   const [trending, ...genreResults] = await Promise.allSettled([
-    invidiousFetch("/api/v1/trending?type=music&region=US") as Promise<
-      InvidiousVideo[]
-    >,
+    pipedFetch("/trending?region=US") as Promise<PipedItem[]>,
     ...genres
       .slice(0, 3)
       .map(
         (g) =>
-          invidiousFetch(
-            `/api/v1/search?q=${encodeURIComponent(`${g} official audio`)}&type=video&maxResults=5`,
-          ) as Promise<InvidiousVideo[]>,
+          pipedFetch(
+            `/search?q=${encodeURIComponent(`${g} official audio`)}&filter=videos`,
+          ) as Promise<{ items: PipedItem[] }>,
       ),
   ]);
 
-  const all: InvidiousVideo[] = [];
-  if (trending.status === "fulfilled") all.push(...trending.value);
+  const allItems: PipedItem[] = [];
+  if (trending.status === "fulfilled") {
+    allItems.push(...(Array.isArray(trending.value) ? trending.value : []));
+  }
   for (const r of genreResults) {
-    if (r.status === "fulfilled") all.push(...r.value);
+    if (r.status === "fulfilled") {
+      const val = r.value as { items: PipedItem[] };
+      allItems.push(...(val?.items ?? []));
+    }
   }
 
   const seen = new Set<string>();
   const songs: Song[] = [];
-  for (const v of all) {
-    if (seen.has(v.videoId)) continue;
-    seen.add(v.videoId);
-    const s = toSong(v);
+  for (const item of allItems) {
+    const inv = pipedToInvidious(item);
+    if (!inv || seen.has(inv.videoId)) continue;
+    seen.add(inv.videoId);
+    const s = toSong(inv);
     if (s) songs.push(s);
   }
   return songs.slice(0, 20);
