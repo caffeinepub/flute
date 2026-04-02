@@ -1,39 +1,42 @@
-# Flute - Smart Auto-Recommendations & History
+# Flute - Version 17
 
 ## Current State
-- PlayerStore has a queue with `addToQueue` / `removeFromQueue` but no reordering
-- NowPlaying has a Queue tab (list view) and a Related tab (uses old YouTube API with API key -- broken)
-- History page exists as a standalone page using backend actor history
-- Library page shows playlists and all cached songs
-- No mood/preference learning system exists
-- No skip feedback UI exists
+
+Flute is a mobile-first, Spotify-style music streaming app using Piped API. It has username-based local auth, queue management, history, playlists (via ICP backend with anonymous principal), liked songs, and smart recommendations. The app has recurring issues:
+- Login button doesn't work on first tap (AuthProvider missing from main.tsx)
+- Playlists broken (Add to Playlist doesn't work)
+- Similar songs tab uses sequential fetching (slow/unreliable)
+- Queue addToQueue appends to end instead of after current song
+- No search memory, no resume last song, no sleep timer
+- User data (history, playlists, liked songs) is shared across all anonymous users on the same device, not per-username
 
 ## Requested Changes (Diff)
 
 ### Add
-- **Auto-queue from Piped related streams**: When a song starts playing, fetch `GET /streams/:videoId` from Piped, extract `relatedStreams` array, classify each by mood from title keywords, filter by user preferences, and silently append to queue
-- **Mood preference system (localStorage)**: Store `flute_mood_prefs` -- artist/mood scores that increase on "Listened" and decrease on "Not Interested"
-- **Skip feedback UI**: When user skips or on queue items, show two inline action buttons: "Listened" (thumbs up) and "Not Interested" (thumbs down). Thumbs up = positive mood reinforcement. Thumbs down = reduce that artist/mood in future recommendations.
-- **Queue reordering**: In the Queue tab of NowPlaying, allow moving items up/down or drag reorder. Add `reorderQueue` action to playerStore.
-- **History tab in Library**: Add tab bar to Library page: "Playlists" | "History" tabs. History tab shows Spotify-style list with timestamps, limited to 100 entries, stored locally (keep using backend actor but cap display at 100).
-- **Remove queue items**: Add remove button on queue items in NowPlaying Queue tab
+- **AuthProvider wrap in main.tsx** -- permanently fix login by wrapping app with AuthContext provider
+- **Per-username data isolation** -- all localStorage keys (history, liked songs, mood prefs, etc.) prefixed with username so each user's data is separate; this provides "cloud-like" isolation between users on same device
+- **Search memory** -- save last search query to localStorage per username; restore it when Search page opens
+- **Resume last song** -- save last played song + queue to localStorage; on app open, show it in player bar paused (not auto-playing)
+- **Sleep timer** -- button in Settings (or NowPlaying) to set a countdown (15, 30, 45, 60 min) after which playback stops; shows remaining time
+- **Queue insert-after-current** -- `addToQueue` inserts song at `queueIndex + 1` instead of appending to end
 
 ### Modify
-- **NowPlaying Related tab**: Replace broken YouTube API call with Piped `/streams/:videoId` relatedStreams fetch. No API key needed.
-- **playerStore**: Add `reorderQueue(fromIndex, toIndex)` action
-- **Auto-trigger**: In NowPlaying or a useEffect watching `currentSong`, auto-fetch recommendations and enqueue top 5 filtered songs if queue has < 3 songs after current
+- **Similar songs** -- change `fetchRelatedSongs` in `pipedRecommendations.ts` to use `Promise.any()` racing all instances in parallel instead of sequential for loop
+- **Playlists** -- investigate and fix Add to Playlist flow; ensure `addSongToPlaylist` mutation is properly triggered from SongCard context menu / song options; store playlists in localStorage per-username as fallback if backend fails
+- **History** -- use per-username localStorage key so history is not shared across users
+- **Liked Songs** -- use per-username localStorage key
 
 ### Remove
-- `fetchRelatedSongs` function in NowPlaying.tsx (uses old YouTube API)
-- References to `localStorage.getItem('yt_api_key')` in NowPlaying related tab
+- Nothing removed
 
 ## Implementation Plan
-1. Add `reorderQueue` to playerStore
-2. Create `src/utils/moodPrefs.ts` -- mood keyword classifier + localStorage preference read/write
-3. Create `src/utils/pipedRecommendations.ts` -- fetches Piped relatedStreams, maps to Song[], scores by mood prefs
-4. Update NowPlaying.tsx:
-   - Replace Related tab with Piped-based recommendations
-   - Add auto-queue useEffect (when currentSong changes, fetch related and enqueue)
-   - Add skip feedback buttons (Listened / Not Interested) on queue and related items
-   - Add reorder (up/down arrows) and remove button on queue items
-5. Update Library.tsx: add Playlists / History tab switcher; History tab shows history list capped at 100, Spotify-style with timestamps
+
+1. **main.tsx**: Import and wrap app with `AuthProvider` from `context/AuthContext.tsx` -- this is the critical login fix
+2. **Per-username storage**: Create a `userStorage` utility that prefixes all localStorage keys with the current username. Update `localHistory.ts`, liked songs, mood prefs, last song, last search to use this utility
+3. **pipedRecommendations.ts**: Replace sequential `for` loop with `Promise.any()` racing all instances simultaneously
+4. **playerStore.ts**: Fix `addToQueue` to insert at `queueIndex + 1`; add `addNextInQueue` action
+5. **Search.tsx**: Save search query to `userStorage` on submit; restore on mount
+6. **playerStore.ts / App.tsx**: On mount, load last song from `userStorage` and restore it to store (paused); on song play, save to `userStorage`
+7. **Sleep timer**: Add timer state (duration + start time) to a new `sleepTimerStore` or inside `playerStore`; add UI in `Settings.tsx` or `NowPlaying.tsx` showing timer options and countdown; call `setIsPlaying(false)` when timer expires
+8. **Playlists**: Read `Library.tsx` and `SongCard.tsx` to find where Add to Playlist is triggered; ensure it calls `useAddSongToPlaylist` mutation correctly; add localStorage fallback for playlist data keyed by username
+9. Validate and build

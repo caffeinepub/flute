@@ -5,7 +5,6 @@ import {
   Check,
   ChevronLeft,
   Edit2,
-  Loader2,
   Music,
   Play,
   Trash2,
@@ -16,32 +15,38 @@ import { useState } from "react";
 import { toast } from "sonner";
 import type { Song } from "../backend";
 import { SongCard } from "../components/SongCard/SongCard";
-import {
-  useAllSongs,
-  usePlaylist,
-  useRemoveSongFromPlaylist,
-  useRenamePlaylist,
-} from "../hooks/useQueries";
+import { useLocalPlaylists } from "../hooks/useLocalQueries";
 import { useNavigationStore } from "../store/navigationStore";
 import { usePlayerStore } from "../store/playerStore";
+import { getPlaylists } from "../utils/localPlaylists";
 
 interface PlaylistDetailProps {
-  playlistId: bigint | null;
+  playlistId: string | null;
 }
 
 export function PlaylistDetail({ playlistId }: PlaylistDetailProps) {
   const { goBack } = useNavigationStore();
-  const { data: playlist, isLoading } = usePlaylist(playlistId);
-  const { data: allSongs = [] } = useAllSongs();
-  const removeSong = useRemoveSongFromPlaylist();
-  const renamePlaylist = useRenamePlaylist();
+  const { rename, removeSong } = useLocalPlaylists();
   const { playSong } = usePlayerStore();
 
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState("");
 
+  if (!playlistId) {
+    return (
+      <div className="p-8 text-muted-foreground">No playlist selected</div>
+    );
+  }
+
+  // Get playlist from local storage
+  const playlist = getPlaylists().find((p) => p.id === playlistId) || null;
+
+  // Resolve songs from song cache
+  const songCache: Record<string, Song> = JSON.parse(
+    localStorage.getItem("flute_song_cache") || "{}",
+  );
   const songs: Song[] = (playlist?.songs || [])
-    .map((id) => allSongs.find((s) => s.videoId === id))
+    .map((id) => songCache[id])
     .filter((s): s is Song => !!s);
 
   const handlePlayAll = () => {
@@ -53,26 +58,18 @@ export function PlaylistDetail({ playlistId }: PlaylistDetailProps) {
     setIsEditing(true);
   };
 
-  const handleSaveEdit = async () => {
+  const handleSaveEdit = () => {
     if (!playlistId || !editName.trim()) return;
-    await renamePlaylist.mutateAsync({ playlistId, name: editName.trim() });
+    rename(playlistId, editName.trim());
     setIsEditing(false);
     toast.success("Playlist renamed");
   };
 
-  const handleRemoveSong = (songId: string) => {
+  const handleRemoveSong = (videoId: string) => {
     if (!playlistId) return;
-    removeSong.mutate(
-      { playlistId, songId },
-      { onSuccess: () => toast.success("Song removed") },
-    );
+    removeSong(playlistId, videoId);
+    toast.success("Song removed");
   };
-
-  if (!playlistId) {
-    return (
-      <div className="p-8 text-muted-foreground">No playlist selected</div>
-    );
-  }
 
   return (
     <div className="px-6 py-8">
@@ -85,18 +82,13 @@ export function PlaylistDetail({ playlistId }: PlaylistDetailProps) {
         <ChevronLeft className="w-4 h-4" /> Back
       </button>
 
-      {isLoading ? (
+      {!playlist ? (
         <div data-ocid="playlist.loading_state" className="space-y-4">
           <Skeleton className="h-8 w-48 bg-accent" />
           <Skeleton className="h-4 w-32 bg-accent" />
           {["sk0", "sk1", "sk2", "sk3", "sk4"].map((k) => (
             <Skeleton key={k} className="h-14 rounded-lg bg-accent" />
           ))}
-        </div>
-      ) : !playlist ? (
-        <div data-ocid="playlist.empty_state" className="text-center py-16">
-          <Music className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
-          <p className="text-muted-foreground">Playlist not found</p>
         </div>
       ) : (
         <>
@@ -145,11 +137,7 @@ export function PlaylistDetail({ playlistId }: PlaylistDetailProps) {
                     onClick={handleSaveEdit}
                     className="text-primary hover:text-primary/80"
                   >
-                    {renamePlaylist.isPending ? (
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                    ) : (
-                      <Check className="w-5 h-5" />
-                    )}
+                    <Check className="w-5 h-5" />
                   </button>
                   <button
                     type="button"

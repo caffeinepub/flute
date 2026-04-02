@@ -13,9 +13,9 @@ export type Page =
 
 interface NavigationState {
   page: Page;
-  playlistId: bigint | null;
+  playlistId: string | null;
   previousPage: Page | null;
-  navigate: (page: Page, playlistId?: bigint) => void;
+  navigate: (page: Page, playlistId?: string) => void;
   goBack: () => void;
 }
 
@@ -24,7 +24,7 @@ export const useNavigationStore = create<NavigationState>((set) => ({
   playlistId: null,
   previousPage: null,
 
-  navigate: (page: Page, playlistId?: bigint) => {
+  navigate: (page: Page, playlistId?: string) => {
     set((s) => ({
       previousPage: s.page,
       page,

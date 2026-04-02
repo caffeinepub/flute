@@ -8,6 +8,7 @@ import type { Song } from "../backend";
 import { SongCard } from "../components/SongCard/SongCard";
 import { searchVideos } from "../lib/invidious";
 import { useNavigationStore } from "../store/navigationStore";
+import { userGet, userSet } from "../utils/userStorage";
 
 const GENRE_SHORTCUTS = [
   "Top hits 2024",
@@ -49,6 +50,13 @@ export function Search() {
   }, []);
 
   useEffect(() => {
+    // Restore last search query
+    const savedQuery = userGet<string>("last_search", "");
+    if (savedQuery) {
+      setQuery(savedQuery);
+    }
+
+    // Handle session query (from other parts of app)
     const q = sessionStorage.getItem("flute_search_query");
     if (q) {
       setQuery(q);
@@ -67,7 +75,16 @@ export function Search() {
   }, [doSearch]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") doSearch(query);
+    if (e.key === "Enter") {
+      userSet("last_search", query);
+      doSearch(query);
+    }
+  };
+
+  const handleShortcutSearch = (g: string) => {
+    setQuery(g);
+    userSet("last_search", g);
+    doSearch(g);
   };
 
   // keep navigate in scope to suppress unused warning
@@ -106,10 +123,7 @@ export function Search() {
                 key={g}
                 type="button"
                 data-ocid="search.tab"
-                onClick={() => {
-                  setQuery(g);
-                  doSearch(g);
-                }}
+                onClick={() => handleShortcutSearch(g)}
                 className="px-4 py-2 rounded-full bg-accent text-foreground text-sm hover:bg-accent/70 transition-colors"
               >
                 {g}

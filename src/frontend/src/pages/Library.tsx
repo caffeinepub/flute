@@ -13,7 +13,6 @@ import {
   Clock,
   Edit2,
   Library as LibraryIcon,
-  Loader2,
   Music,
   Plus,
   Trash2,
@@ -21,26 +20,18 @@ import {
 import { motion } from "motion/react";
 import { useState } from "react";
 import { toast } from "sonner";
-import type { HistoryEntry, PlaylistView } from "../backend";
 import { SongCard } from "../components/SongCard/SongCard";
-import {
-  useAllPlaylists,
-  useAllSongs,
-  useCreatePlaylist,
-  useDeletePlaylist,
-  useListeningHistory,
-  useRenamePlaylist,
-} from "../hooks/useQueries";
+import { useLocalPlaylists } from "../hooks/useLocalQueries";
 import { useNavigationStore } from "../store/navigationStore";
 import { usePlayerStore } from "../store/playerStore";
+import { getLocalHistory } from "../utils/localHistory";
+import type { HistoryEntry } from "../utils/localHistory";
 
-const SKEL_8 = ["sk0", "sk1", "sk2", "sk3", "sk4", "sk5", "sk6", "sk7"];
 const EMPTY_SLOTS = ["e0", "e1", "e2", "e3"];
 
-function formatRelativeTime(tsNano: bigint): string {
-  const ms = Number(tsNano) / 1_000_000;
+function formatRelativeTime(ts: number): string {
   const now = Date.now();
-  const diff = now - ms;
+  const diff = now - ts;
   const minutes = Math.floor(diff / 60_000);
   const hours = Math.floor(diff / 3_600_000);
   const days = Math.floor(diff / 86_400_000);
@@ -49,16 +40,15 @@ function formatRelativeTime(tsNano: bigint): string {
   if (hours < 24) return `${hours}h ago`;
   if (days === 1) return "Yesterday";
   if (days < 7) return `${days} days ago`;
-  return new Date(ms).toLocaleDateString(undefined, {
+  return new Date(ts).toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
   });
 }
 
-function getDateGroup(tsNano: bigint): string {
-  const ms = Number(tsNano) / 1_000_000;
+function getDateGroup(ts: number): string {
   const now = Date.now();
-  const diff = now - ms;
+  const diff = now - ts;
   const days = Math.floor(diff / 86_400_000);
   if (days < 1) return "Today";
   if (days < 2) return "Yesterday";
@@ -69,13 +59,13 @@ function getDateGroup(tsNano: bigint): string {
 const GROUP_ORDER = ["Today", "Yesterday", "This Week", "Earlier"];
 
 export function Library() {
-  const { data: playlists = [], isLoading } = useAllPlaylists();
-  const { data: allSongs = [] } = useAllSongs();
-  const { data: history = [], isLoading: historyLoading } =
-    useListeningHistory();
-  const createPlaylist = useCreatePlaylist();
-  const deletePlaylist = useDeletePlaylist();
-  const renamePlaylist = useRenamePlaylist();
+  const {
+    playlists,
+    create,
+    remove,
+    rename,
+    refresh: refreshPlaylists,
+  } = useLocalPlaylists();
   const { navigate } = useNavigationStore();
 
   const [activeTab, setActiveTab] = useState<"playlists" | "history">(
@@ -83,43 +73,51 @@ export function Library() {
   );
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
-  const [renameId, setRenameId] = useState<bigint | null>(null);
+  const [renameId, setRenameId] = useState<string | null>(null);
   const [renameName, setRenameName] = useState("");
-  const [deleteId, setDeleteId] = useState<bigint | null>(null);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
 
-  const handleCreate = async () => {
+  // History from local storage
+  const history: HistoryEntry[] = getLocalHistory();
+
+  // Get song cache for playlist thumbnails
+  const songCache: Record<
+    string,
+    {
+      videoId: string;
+      title: string;
+      thumbnail: string;
+      channel: string;
+      duration: string;
+    }
+  > = JSON.parse(localStorage.getItem("flute_song_cache") || "{}");
+
+  const handleCreate = () => {
     if (!newName.trim()) return;
-    await createPlaylist.mutateAsync(newName.trim());
+    create(newName.trim());
     setNewName("");
     setShowCreate(false);
     toast.success("Playlist created");
   };
 
-  const handleRename = async () => {
+  const handleRename = () => {
     if (!renameId || !renameName.trim()) return;
-    await renamePlaylist.mutateAsync({
-      playlistId: renameId,
-      name: renameName.trim(),
-    });
+    rename(renameId, renameName.trim());
     setRenameId(null);
     toast.success("Playlist renamed");
+    refreshPlaylists();
   };
 
-  const handleDelete = async () => {
+  const handleDelete = () => {
     if (!deleteId) return;
-    await deletePlaylist.mutateAsync(deleteId);
+    remove(deleteId);
     setDeleteId(null);
     toast.success("Playlist deleted");
   };
 
-  // Cap history at 100, most recent first
-  const recentHistory: HistoryEntry[] = [...history]
-    .sort((a, b) => Number(b.timestamp - a.timestamp))
-    .slice(0, 100);
-
-  // Group by date
+  // Group history
   const grouped: Record<string, HistoryEntry[]> = {};
-  for (const entry of recentHistory) {
+  for (const entry of history) {
     const group = getDateGroup(entry.timestamp);
     if (!grouped[group]) grouped[group] = [];
     grouped[group].push(entry);
@@ -161,20 +159,8 @@ export function Library() {
 
       {/* Playlists tab */}
       {activeTab === "playlists" && (
-        <>
-          {isLoading ? (
-            <div
-              data-ocid="library.loading_state"
-              className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4"
-            >
-              {SKEL_8.map((k) => (
-                <div key={k} className="space-y-3">
-                  <Skeleton className="aspect-square rounded-xl bg-accent" />
-                  <Skeleton className="h-4 rounded bg-accent" />
-                </div>
-              ))}
-            </div>
-          ) : playlists.length === 0 ? (
+        <div>
+          {playlists.length === 0 ? (
             <motion.div
               data-ocid="library.empty_state"
               initial={{ opacity: 0 }}
@@ -198,9 +184,9 @@ export function Library() {
             </motion.div>
           ) : (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {playlists.map((pl: PlaylistView, i) => (
+              {playlists.map((pl, i) => (
                 <motion.div
-                  key={pl.id.toString()}
+                  key={pl.id}
                   data-ocid={`library.item.${i + 1}`}
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -216,9 +202,7 @@ export function Library() {
                     {pl.songs.length > 0 ? (
                       <div className="grid grid-cols-2 w-full h-full">
                         {pl.songs.slice(0, 4).map((songId) => {
-                          const song = allSongs.find(
-                            (s) => s.videoId === songId,
-                          );
+                          const song = songCache[songId];
                           return song ? (
                             <img
                               key={songId}
@@ -285,44 +269,13 @@ export function Library() {
               ))}
             </div>
           )}
-
-          {allSongs.length > 0 && (
-            <section className="mt-10">
-              <h2 className="text-xl font-bold text-foreground mb-4">
-                All Cached Songs
-              </h2>
-              <div className="space-y-1">
-                {allSongs.map((song, i) => (
-                  <SongCard
-                    key={song.videoId}
-                    song={song}
-                    queue={allSongs}
-                    index={i}
-                    variant="list"
-                  />
-                ))}
-              </div>
-            </section>
-          )}
-        </>
+        </div>
       )}
 
       {/* History tab */}
       {activeTab === "history" && (
         <div data-ocid="library.history.panel">
-          {historyLoading ? (
-            <div data-ocid="library.loading_state" className="space-y-3">
-              {SKEL_8.map((k) => (
-                <div key={k} className="flex items-center gap-3">
-                  <Skeleton className="w-10 h-10 rounded bg-accent flex-shrink-0" />
-                  <div className="flex-1 space-y-2">
-                    <Skeleton className="h-3 w-full bg-accent" />
-                    <Skeleton className="h-3 w-1/2 bg-accent" />
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : recentHistory.length === 0 ? (
+          {history.length === 0 ? (
             <motion.div
               data-ocid="library.empty_state"
               initial={{ opacity: 0 }}
@@ -347,52 +300,39 @@ export function Library() {
                         {group}
                       </h3>
                       <div className="space-y-1">
-                        {grouped[group].map((entry, i) => {
-                          const song = allSongs.find(
-                            (s) => s.videoId === entry.songId,
-                          );
-                          return (
-                            <motion.button
-                              key={`${entry.songId}-${entry.timestamp.toString()}`}
-                              type="button"
-                              data-ocid={`history.item.${i + 1}`}
-                              initial={{ opacity: 0, x: -8 }}
-                              animate={{ opacity: 1, x: 0 }}
-                              transition={{ delay: i * 0.03 }}
-                              className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-accent transition-colors text-left group"
-                              onClick={() => {
-                                if (song) {
-                                  usePlayerStore
-                                    .getState()
-                                    .playSong(song, allSongs);
-                                }
-                              }}
-                            >
-                              {song ? (
-                                <img
-                                  src={song.thumbnail}
-                                  alt={song.title}
-                                  className="w-10 h-10 rounded object-cover flex-shrink-0"
-                                />
-                              ) : (
-                                <div className="w-10 h-10 rounded bg-accent flex items-center justify-center flex-shrink-0">
-                                  <Music className="w-4 h-4 text-muted-foreground" />
-                                </div>
-                              )}
-                              <div className="flex-1 min-w-0">
-                                <p className="text-sm font-medium text-foreground truncate group-hover:text-primary transition-colors">
-                                  {song?.title || entry.songId}
-                                </p>
-                                <p className="text-xs text-muted-foreground truncate">
-                                  {song?.channel || "Unknown"}
-                                </p>
-                              </div>
-                              <span className="text-xs text-muted-foreground flex-shrink-0">
-                                {formatRelativeTime(entry.timestamp)}
-                              </span>
-                            </motion.button>
-                          );
-                        })}
+                        {grouped[group].map((entry, i) => (
+                          <motion.button
+                            key={`${entry.song.videoId}-${entry.timestamp}`}
+                            type="button"
+                            data-ocid={`history.item.${i + 1}`}
+                            initial={{ opacity: 0, x: -8 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: i * 0.03 }}
+                            className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-accent transition-colors text-left group"
+                            onClick={() => {
+                              usePlayerStore
+                                .getState()
+                                .playSong(entry.song, [entry.song]);
+                            }}
+                          >
+                            <img
+                              src={entry.song.thumbnail}
+                              alt={entry.song.title}
+                              className="w-10 h-10 rounded object-cover flex-shrink-0"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-foreground truncate group-hover:text-primary transition-colors">
+                                {entry.song.title}
+                              </p>
+                              <p className="text-xs text-muted-foreground truncate">
+                                {entry.song.channel}
+                              </p>
+                            </div>
+                            <span className="text-xs text-muted-foreground flex-shrink-0">
+                              {formatRelativeTime(entry.timestamp)}
+                            </span>
+                          </motion.button>
+                        ))}
                       </div>
                     </div>
                   ),
@@ -434,14 +374,10 @@ export function Library() {
             <Button
               data-ocid="library.confirm_button"
               onClick={handleCreate}
-              disabled={!newName.trim() || createPlaylist.isPending}
+              disabled={!newName.trim()}
               className="bg-primary text-primary-foreground"
             >
-              {createPlaylist.isPending ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                "Create"
-              )}
+              Create
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -477,14 +413,10 @@ export function Library() {
             <Button
               data-ocid="library.confirm_button"
               onClick={handleRename}
-              disabled={!renameName.trim() || renamePlaylist.isPending}
+              disabled={!renameName.trim()}
               className="bg-primary text-primary-foreground"
             >
-              {renamePlaylist.isPending ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                "Save"
-              )}
+              Save
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -516,14 +448,9 @@ export function Library() {
             <Button
               data-ocid="library.delete_button"
               onClick={handleDelete}
-              disabled={deletePlaylist.isPending}
               className="bg-destructive text-destructive-foreground"
             >
-              {deletePlaylist.isPending ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                "Delete"
-              )}
+              Delete
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -3,15 +3,10 @@ import { Music, Play } from "lucide-react";
 import { motion } from "motion/react";
 import type { Song } from "../backend";
 import { SongCard } from "../components/SongCard/SongCard";
-import { useInternetIdentity } from "../hooks/useInternetIdentity";
-import {
-  useAllPlaylists,
-  useAllSongs,
-  useListeningHistory,
-  useUserProfile,
-} from "../hooks/useQueries";
+import { useLocalAuth } from "../hooks/useLocalAuth";
+import { useLocalPlaylists } from "../hooks/useLocalQueries";
 import { useNavigationStore } from "../store/navigationStore";
-import { usePlayerStore } from "../store/playerStore";
+import { getLocalHistory } from "../utils/localHistory";
 
 const GENRES = [
   { label: "Pop", color: "bg-pink-600", query: "top pop hits 2024" },
@@ -69,22 +64,24 @@ function getGreeting() {
 }
 
 export function Home() {
-  const { identity } = useInternetIdentity();
-  const { data: profile } = useUserProfile();
-  const { data: history = [], isLoading: historyLoading } =
-    useListeningHistory();
-  const { data: allSongs = [] } = useAllSongs();
-  const { data: playlists = [] } = useAllPlaylists();
+  const { user } = useLocalAuth();
+  const { playlists } = useLocalPlaylists();
   const { navigate } = useNavigationStore();
-  // suppress unused - playSong used only by SongCard via queue
-  void usePlayerStore;
-  const username =
-    profile?.name || identity?.getPrincipal().toString().slice(0, 8) || "there";
 
-  const recentSongIds = [...new Set(history.map((h) => h.songId))].slice(0, 6);
-  const recentSongs: Song[] = recentSongIds
-    .map((id) => allSongs.find((s) => s.videoId === id))
+  const username = user?.username || "there";
+
+  // Recent songs from local history
+  const localHistory = getLocalHistory();
+  const recentSongs: Song[] = localHistory
+    .slice(0, 6)
+    .map((e) => e.song)
     .filter((s): s is Song => !!s);
+
+  // Song cache for "Your Music" section
+  const songCache: Record<string, Song> = JSON.parse(
+    localStorage.getItem("flute_song_cache") || "{}",
+  );
+  const cachedSongs = Object.values(songCache).slice(0, 10);
 
   const triggerSearch = (query: string) => {
     navigate("search");
@@ -132,7 +129,7 @@ export function Home() {
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             {playlists.slice(0, 6).map((pl, i) => (
               <motion.button
-                key={pl.id.toString()}
+                key={pl.id}
                 type="button"
                 data-ocid={`home.playlist.item.${i + 1}`}
                 initial={{ opacity: 0, scale: 0.97 }}
@@ -159,34 +156,22 @@ export function Home() {
       )}
 
       {/* Recently Played */}
-      {(recentSongs.length > 0 || historyLoading) && (
+      {recentSongs.length > 0 && (
         <section>
           <h2 className="text-xl font-bold text-foreground mb-4">
             Recently Played
           </h2>
-          {historyLoading ? (
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-              {SKEL_6.map((k) => (
-                <div key={k} className="space-y-3">
-                  <Skeleton className="aspect-square rounded-lg bg-accent" />
-                  <Skeleton className="h-3 rounded bg-accent" />
-                  <Skeleton className="h-3 w-2/3 rounded bg-accent" />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-              {recentSongs.map((song, i) => (
-                <SongCard
-                  key={song.videoId}
-                  song={song}
-                  queue={recentSongs}
-                  index={i}
-                  variant="grid"
-                />
-              ))}
-            </div>
-          )}
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            {recentSongs.map((song, i) => (
+              <SongCard
+                key={song.videoId}
+                song={song}
+                queue={recentSongs}
+                index={i}
+                variant="grid"
+              />
+            ))}
+          </div>
         </section>
       )}
 
@@ -216,34 +201,34 @@ export function Home() {
       </section>
 
       {/* All cached songs */}
-      {allSongs.length > 0 && (
+      {cachedSongs.length > 0 && (
         <section>
           <h2 className="text-xl font-bold text-foreground mb-4">Your Music</h2>
           <div className="space-y-1">
-            {allSongs.slice(0, 10).map((song, i) => (
+            {cachedSongs.map((song, i) => (
               <SongCard
                 key={song.videoId}
                 song={song}
-                queue={allSongs}
+                queue={cachedSongs}
                 index={i}
                 variant="list"
               />
             ))}
           </div>
-          {allSongs.length > 10 && (
+          {Object.keys(songCache).length > 10 && (
             <button
               type="button"
               onClick={() => navigate("library")}
               className="mt-3 text-sm text-muted-foreground hover:text-foreground transition-colors"
             >
-              View all {allSongs.length} songs →
+              View all {Object.keys(songCache).length} songs →
             </button>
           )}
         </section>
       )}
 
       {/* Empty state */}
-      {allSongs.length === 0 && recentSongs.length === 0 && !historyLoading && (
+      {cachedSongs.length === 0 && recentSongs.length === 0 && (
         <motion.div
           data-ocid="home.empty_state"
           initial={{ opacity: 0 }}
@@ -284,3 +269,6 @@ export function Home() {
     </div>
   );
 }
+
+// Suppress unused import - remove Skeleton if not used
+void SKEL_6;

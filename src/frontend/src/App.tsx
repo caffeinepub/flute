@@ -20,6 +20,7 @@ import { PlaylistDetail } from "./pages/PlaylistDetail";
 import { Search } from "./pages/Search";
 import { Settings } from "./pages/Settings";
 import { useNavigationStore } from "./store/navigationStore";
+import { loadLastSong, usePlayerStore } from "./store/playerStore";
 
 // Apply saved theme on startup
 loadSavedTheme();
@@ -108,6 +109,20 @@ function MainLayout() {
     window.addEventListener("flute-navigate", handler);
     return () => window.removeEventListener("flute-navigate", handler);
   }, [navigate]);
+
+  // Resume last song on mount (paused)
+  useEffect(() => {
+    const saved = loadLastSong();
+    if (saved) {
+      usePlayerStore.setState({
+        currentSong: saved.song,
+        queue: saved.queue,
+        queueIndex: saved.queueIndex,
+        isPlaying: false,
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const isMeel = page === "meel";
 

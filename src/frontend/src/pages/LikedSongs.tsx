@@ -1,16 +1,13 @@
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Heart, Play } from "lucide-react";
 import { motion } from "motion/react";
 import { SongCard } from "../components/SongCard/SongCard";
-import { useLikedSongs } from "../hooks/useQueries";
+import { useLocalLikedSongs } from "../hooks/useLocalQueries";
 import { useNavigationStore } from "../store/navigationStore";
 import { usePlayerStore } from "../store/playerStore";
 
-const SKEL_8 = ["sk0", "sk1", "sk2", "sk3", "sk4", "sk5", "sk6", "sk7"];
-
 export function LikedSongs() {
-  const { data: songs = [], isLoading } = useLikedSongs();
+  const { likedSongs: songs } = useLocalLikedSongs();
   const { playSong } = usePlayerStore();
   const { navigate } = useNavigationStore();
 
@@ -44,13 +41,7 @@ export function LikedSongs() {
         </div>
       </div>
 
-      {isLoading ? (
-        <div data-ocid="liked.loading_state" className="space-y-2">
-          {SKEL_8.map((k) => (
-            <Skeleton key={k} className="h-14 rounded-lg bg-accent" />
-          ))}
-        </div>
-      ) : songs.length === 0 ? (
+      {songs.length === 0 ? (
         <motion.div
           data-ocid="liked.empty_state"
           initial={{ opacity: 0 }}

@@ -13,12 +13,9 @@ import { useState } from "react";
 import { toast } from "sonner";
 import type { Song } from "../../backend";
 import {
-  useAddSongToPlaylist,
-  useAllPlaylists,
-  useLikeSong,
-  useLikedSongs,
-  useUnlikeSong,
-} from "../../hooks/useQueries";
+  useLocalLikedSongs,
+  useLocalPlaylists,
+} from "../../hooks/useLocalQueries";
 import { usePlayerStore } from "../../store/playerStore";
 
 interface SongCardProps {
@@ -39,11 +36,8 @@ export function SongCard({
   const isCurrentSong = currentSong?.videoId === song.videoId;
   const isPlaying = usePlayerStore((s) => s.isPlaying);
 
-  const { data: likedSongs = [] } = useLikedSongs();
-  const { data: playlists = [] } = useAllPlaylists();
-  const likeSong = useLikeSong();
-  const unlikeSong = useUnlikeSong();
-  const addToPlaylist = useAddSongToPlaylist();
+  const { likedSongs, like, unlike } = useLocalLikedSongs();
+  const { playlists, addSong: addSongToPlaylist } = useLocalPlaylists();
 
   const isLiked = likedSongs.some((s) => s.videoId === song.videoId);
   const [hovered, setHovered] = useState(false);
@@ -55,21 +49,17 @@ export function SongCard({
   const handleLike = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (isLiked) {
-      unlikeSong.mutate(song.videoId, {
-        onSuccess: () => toast.success("Removed from Liked Songs"),
-      });
+      unlike(song.videoId);
+      toast.success("Removed from Liked Songs");
     } else {
-      likeSong.mutate(song.videoId, {
-        onSuccess: () => toast.success("Added to Liked Songs"),
-      });
+      like(song);
+      toast.success("Added to Liked Songs");
     }
   };
 
-  const handleAddToPlaylist = (playlistId: bigint, playlistName: string) => {
-    addToPlaylist.mutate(
-      { playlistId, songId: song.videoId },
-      { onSuccess: () => toast.success(`Added to "${playlistName}"`) },
-    );
+  const handleAddToPlaylist = (playlistId: string, playlistName: string) => {
+    addSongToPlaylist(playlistId, song);
+    toast.success(`Added to "${playlistName}"`);
   };
 
   const ActionsMenu = ({ stopProp }: { stopProp?: boolean }) => (
@@ -110,7 +100,7 @@ export function SongCard({
             <DropdownMenuSubContent className="bg-popover border-border">
               {playlists.map((pl) => (
                 <DropdownMenuItem
-                  key={pl.id.toString()}
+                  key={pl.id}
                   onClick={() => handleAddToPlaylist(pl.id, pl.name)}
                   className="cursor-pointer"
                 >
@@ -182,7 +172,6 @@ export function SongCard({
         <span className="text-xs text-muted-foreground flex-shrink-0">
           {song.duration}
         </span>
-        {/* Like button -- always visible on mobile (opacity-60 base, full on hover/liked) */}
         <button
           type="button"
           data-ocid={`song.toggle.${(index ?? 0) + 1}`}
@@ -196,7 +185,6 @@ export function SongCard({
         >
           <Heart className={cn("w-4 h-4", isLiked && "fill-current")} />
         </button>
-        {/* Quick add-to-queue button -- always visible on mobile */}
         <button
           type="button"
           data-ocid={`song.secondary_button.${(index ?? 0) + 1}`}
@@ -309,7 +297,7 @@ export function SongCard({
                 <DropdownMenuSubContent className="bg-popover border-border">
                   {playlists.map((pl) => (
                     <DropdownMenuItem
-                      key={pl.id.toString()}
+                      key={pl.id}
                       onClick={() => handleAddToPlaylist(pl.id, pl.name)}
                       className="cursor-pointer"
                     >

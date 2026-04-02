@@ -3,6 +3,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Check,
+  Clock,
   LogOut,
   Palette,
   RefreshCw,
@@ -10,7 +11,7 @@ import {
   User,
 } from "lucide-react";
 import { motion } from "motion/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useLocalAuth } from "../hooks/useLocalAuth";
 import {
@@ -19,6 +20,22 @@ import {
   applyTheme,
   loadSavedTheme,
 } from "../lib/theme";
+import { usePlayerStore } from "../store/playerStore";
+
+const SLEEP_OPTIONS = [
+  { label: "15 min", minutes: 15 },
+  { label: "30 min", minutes: 30 },
+  { label: "45 min", minutes: 45 },
+  { label: "60 min", minutes: 60 },
+];
+
+function formatCountdown(ms: number): string {
+  if (ms <= 0) return "0:00";
+  const totalSecs = Math.ceil(ms / 1000);
+  const mins = Math.floor(totalSecs / 60);
+  const secs = totalSecs % 60;
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
 
 export function Settings() {
   const { user, logout } = useLocalAuth();
@@ -27,10 +44,54 @@ export function Settings() {
   const [nameSaved, setNameSaved] = useState(false);
   const [activeTheme, setActiveTheme] = useState<ThemeColor>("green");
 
+  // Sleep timer state
+  const [sleepEndTime, setSleepEndTime] = useState<number | null>(null);
+  const [remaining, setRemaining] = useState<number>(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   useEffect(() => {
     setEditName(user?.username || "");
     setActiveTheme(loadSavedTheme());
   }, [user]);
+
+  // Countdown tick
+  useEffect(() => {
+    if (sleepEndTime === null) {
+      if (timerRef.current) clearInterval(timerRef.current);
+      setRemaining(0);
+      return;
+    }
+
+    const tick = () => {
+      const left = sleepEndTime - Date.now();
+      if (left <= 0) {
+        setRemaining(0);
+        setSleepEndTime(null);
+        usePlayerStore.getState().setIsPlaying(false);
+        toast.success("Sleep timer ended. Music paused.");
+        if (timerRef.current) clearInterval(timerRef.current);
+      } else {
+        setRemaining(left);
+      }
+    };
+
+    tick();
+    timerRef.current = setInterval(tick, 1000);
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [sleepEndTime]);
+
+  const handleSetSleepTimer = (minutes: number) => {
+    const endTime = Date.now() + minutes * 60 * 1000;
+    setSleepEndTime(endTime);
+    toast.success(`Sleep timer set for ${minutes} minutes`);
+  };
+
+  const handleCancelSleepTimer = () => {
+    setSleepEndTime(null);
+    toast.success("Sleep timer cancelled");
+  };
 
   const handleSaveName = () => {
     if (!editName.trim()) return;
@@ -143,6 +204,78 @@ export function Settings() {
                 </button>
               );
             })}
+          </div>
+        </motion.section>
+
+        {/* Sleep Timer */}
+        <motion.section
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.08 }}
+          className="bg-card rounded-xl p-5 shadow-card"
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <Clock className="w-5 h-5 text-primary" />
+            <h2 className="text-lg font-semibold text-foreground">
+              Sleep Timer
+            </h2>
+          </div>
+          <p className="text-sm text-muted-foreground mb-4">
+            Automatically pause music after a set time.
+          </p>
+
+          {sleepEndTime && (
+            <div className="flex items-center gap-3 mb-4 px-4 py-3 rounded-xl bg-primary/10 border border-primary/20">
+              <Clock className="w-4 h-4 text-primary shrink-0" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-foreground">
+                  Timer active
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Pausing in {formatCountdown(remaining)}
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleCancelSleepTimer}
+                className="text-muted-foreground hover:text-foreground text-xs h-7 px-2"
+              >
+                Cancel
+              </Button>
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-2">
+            {SLEEP_OPTIONS.map((opt) => {
+              const isActive =
+                sleepEndTime !== null &&
+                Math.abs(sleepEndTime - Date.now() - opt.minutes * 60 * 1000) <
+                  5000;
+              return (
+                <button
+                  key={opt.minutes}
+                  type="button"
+                  onClick={() => handleSetSleepTimer(opt.minutes)}
+                  className={`px-4 py-2 rounded-full border text-sm font-medium transition-all ${
+                    isActive
+                      ? "border-primary bg-primary/15 text-primary"
+                      : "border-border text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+            {sleepEndTime && (
+              <button
+                type="button"
+                onClick={handleCancelSleepTimer}
+                className="px-4 py-2 rounded-full border border-destructive/50 text-destructive text-sm font-medium hover:bg-destructive/10 transition-all"
+              >
+                Off
+              </button>
+            )}
           </div>
         </motion.section>
 

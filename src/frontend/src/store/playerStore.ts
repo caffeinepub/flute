@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { Song } from "../backend";
+import { userGet, userSet } from "../utils/userStorage";
 
 export type RepeatMode = "none" | "one" | "all";
 
@@ -8,6 +9,19 @@ let _seekCallback: ((seconds: number) => void) | null = null;
 
 export function registerSeekCallback(cb: (seconds: number) => void) {
   _seekCallback = cb;
+}
+
+const LAST_SONG_KEY = "last_playing_song";
+
+export function loadLastSong(): {
+  song: Song;
+  queue: Song[];
+  queueIndex: number;
+} | null {
+  return userGet<{ song: Song; queue: Song[]; queueIndex: number } | null>(
+    LAST_SONG_KEY,
+    null,
+  );
 }
 
 interface PlayerState {
@@ -51,14 +65,17 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   playSong: (song: Song, queue?: Song[]) => {
     const newQueue = queue || [song];
     const idx = newQueue.findIndex((s) => s.videoId === song.videoId);
+    const queueIndex = idx >= 0 ? idx : 0;
     set({
       currentSong: song,
       queue: newQueue,
-      queueIndex: idx >= 0 ? idx : 0,
+      queueIndex,
       isPlaying: true,
       progress: 0,
       duration: 0,
     });
+    // Persist last song for resume
+    userSet(LAST_SONG_KEY, { song, queue: newQueue, queueIndex });
   },
 
   togglePlay: () => {
@@ -111,7 +128,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   addToQueue: (song: Song) => {
-    set((s) => ({ queue: [...s.queue, song] }));
+    set((s) => {
+      const insertAt = s.queue.length === 0 ? 0 : s.queueIndex + 1;
+      const newQueue = [...s.queue];
+      newQueue.splice(insertAt, 0, song);
+      return { queue: newQueue };
+    });
   },
 
   removeFromQueue: (index: number) => {
