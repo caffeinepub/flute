@@ -1,42 +1,58 @@
-# Flute - Version 17
+# Flute — PWA + Similar Songs + Login Removal
 
 ## Current State
-
-Flute is a mobile-first, Spotify-style music streaming app using Piped API. It has username-based local auth, queue management, history, playlists (via ICP backend with anonymous principal), liked songs, and smart recommendations. The app has recurring issues:
-- Login button doesn't work on first tap (AuthProvider missing from main.tsx)
-- Playlists broken (Add to Playlist doesn't work)
-- Similar songs tab uses sequential fetching (slow/unreliable)
-- Queue addToQueue appends to end instead of after current song
-- No search memory, no resume last song, no sleep timer
-- User data (history, playlists, liked songs) is shared across all anonymous users on the same device, not per-username
+- Flute is a mobile-first Spotify-style music player using Piped API
+- Has a local login system (username + guest mode) gating the app behind a sign-in page
+- Similar Songs tab fetches relatedStreams from Piped but: accepts first response blindly even if empty/incomplete, uses no validation, has queue contamination (similar songs auto-added to queue), shows 00:00 duration tracks, has no deduplication, and falls back to original search query instead of track metadata
+- Queue can loop the same song because auto-fill uses original search query
+- No PWA support (no manifest.json, no service worker, no install prompt)
+- main.tsx wraps with InternetIdentityProvider but NOT AuthProvider — login breaks on every update
+- Icons: 4 sizes generated at /assets/generated/flute-icon-*.png
 
 ## Requested Changes (Diff)
 
 ### Add
-- **AuthProvider wrap in main.tsx** -- permanently fix login by wrapping app with AuthContext provider
-- **Per-username data isolation** -- all localStorage keys (history, liked songs, mood prefs, etc.) prefixed with username so each user's data is separate; this provides "cloud-like" isolation between users on same device
-- **Search memory** -- save last search query to localStorage per username; restore it when Search page opens
-- **Resume last song** -- save last played song + queue to localStorage; on app open, show it in player bar paused (not auto-playing)
-- **Sleep timer** -- button in Settings (or NowPlaying) to set a countdown (15, 30, 45, 60 min) after which playback stops; shows remaining time
-- **Queue insert-after-current** -- `addToQueue` inserts song at `queueIndex + 1` instead of appending to end
+- manifest.json in public/ with name "Flute", display standalone, portrait, black colors, all 4 icon sizes
+- service-worker.js in public/ with cache-first for static assets, network-only for API/stream URLs
+- Register service worker in main.tsx
+- PWA meta tags in index.html (theme-color, apple-mobile-web-app, viewport)
+- Install App button: hook into beforeinstallprompt, show "Install Flute" button, hide after install
+- Install button placed in Settings page and/or BottomNav
+- Smart fallback search in pipedRecommendations.ts using `title + " " + uploader` (never original query)
+- Three-tier fallback: 1) relatedStreams (min 5 valid), 2) smart search, 3) broad query variants
+- Deduplication by videoId across relatedSongs results
+- Cache relatedSongs per videoId to avoid refetch
 
 ### Modify
-- **Similar songs** -- change `fetchRelatedSongs` in `pipedRecommendations.ts` to use `Promise.any()` racing all instances in parallel instead of sequential for loop
-- **Playlists** -- investigate and fix Add to Playlist flow; ensure `addSongToPlaylist` mutation is properly triggered from SongCard context menu / song options; store playlists in localStorage per-username as fallback if backend fails
-- **History** -- use per-username localStorage key so history is not shared across users
-- **Liked Songs** -- use per-username localStorage key
+- Remove SignInPage component from App.tsx — skip login entirely, always render MainLayout
+- Remove `if (!user) return <SignInPage />` guard from App() in App.tsx
+- App.tsx: import AuthProvider from context, wrap everything properly (or just skip auth check)
+- main.tsx: Add AuthProvider wrapper (permanent fix)
+- pipedRecommendations.ts: Full rewrite of fetchRelatedSongs:
+  - Use Promise.any() but validate EACH response before accepting (relatedStreams.length >= 5)
+  - Implement validation race: Promise.any(instances.map(i => fetchAndValidate(i, videoId)))
+  - Filter: duration > 30 seconds, valid videoId (11 chars), non-null URL
+  - Deduplicate by videoId
+  - Smart fallback: if all fail, search `title + " " + uploader + " official audio"`
+  - Broad fallback: if smart search fails, try `title + " remix"`, `title + " song"`
+  - Cache results per videoId in a Map
+- NowPlaying.tsx: Remove the auto-add-to-queue logic from loadRelated (lines that call addToQueue). Similar Songs and Queue must be COMPLETELY SEPARATE. Similar Songs only displays; never auto-pollutes queue.
+- NowPlaying.tsx: Filter relatedSongs display to never show 00:00 (duration must be > 30s string-parsed)
+- index.html: Add PWA meta tags, manifest link, theme-color
 
 ### Remove
-- Nothing removed
+- SignInPage component (entire function) from App.tsx
+- Login guard from App() export
+- Auth-related imports no longer needed in App.tsx (useLocalAuth)
+- The auto-queue-fill block from NowPlaying.tsx's loadRelated callback
 
 ## Implementation Plan
-
-1. **main.tsx**: Import and wrap app with `AuthProvider` from `context/AuthContext.tsx` -- this is the critical login fix
-2. **Per-username storage**: Create a `userStorage` utility that prefixes all localStorage keys with the current username. Update `localHistory.ts`, liked songs, mood prefs, last song, last search to use this utility
-3. **pipedRecommendations.ts**: Replace sequential `for` loop with `Promise.any()` racing all instances simultaneously
-4. **playerStore.ts**: Fix `addToQueue` to insert at `queueIndex + 1`; add `addNextInQueue` action
-5. **Search.tsx**: Save search query to `userStorage` on submit; restore on mount
-6. **playerStore.ts / App.tsx**: On mount, load last song from `userStorage` and restore it to store (paused); on song play, save to `userStorage`
-7. **Sleep timer**: Add timer state (duration + start time) to a new `sleepTimerStore` or inside `playerStore`; add UI in `Settings.tsx` or `NowPlaying.tsx` showing timer options and countdown; call `setIsPlaying(false)` when timer expires
-8. **Playlists**: Read `Library.tsx` and `SongCard.tsx` to find where Add to Playlist is triggered; ensure it calls `useAddSongToPlaylist` mutation correctly; add localStorage fallback for playlist data keyed by username
-9. Validate and build
+1. Write manifest.json → src/frontend/public/manifest.json (references generated icon paths)
+2. Write service-worker.js → src/frontend/public/service-worker.js
+3. Update src/frontend/index.html with PWA meta tags + manifest link
+4. Update src/frontend/src/main.tsx: add AuthProvider wrapper + SW registration
+5. Rewrite src/frontend/src/utils/pipedRecommendations.ts with full validation pipeline
+6. Update src/frontend/src/App.tsx: remove SignInPage, remove login guard, keep MainLayout
+7. Update src/frontend/src/pages/NowPlaying.tsx: remove auto-queue-fill, keep similar songs display
+8. Update src/frontend/src/pages/Settings.tsx: add Install App button
+9. Validate + deploy

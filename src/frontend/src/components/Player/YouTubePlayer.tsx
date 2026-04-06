@@ -1,12 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import { useCacheSong, useRecordListening } from "../../hooks/useQueries";
-import { getStreamUrl, searchVideos } from "../../lib/invidious";
+import { pipedFetch, searchVideos } from "../../lib/invidious";
 import { registerSeekCallback, usePlayerStore } from "../../store/playerStore";
 import { addToLocalHistory } from "../../utils/localHistory";
 
+interface PipedAudioStream {
+  url: string;
+  bitrate: number;
+  mimeType: string;
+}
+
+interface PipedStreamsData {
+  audioStreams: PipedAudioStream[];
+  duration?: number;
+}
+
 export function YouTubePlayer() {
   const audioRef = useRef<HTMLAudioElement>(null);
-  const prevVideoIdRef = useRef<string | null>(null);
+  const loadingVideoIdRef = useRef<string | null>(null);
   const [isBuffering, setIsBuffering] = useState(false);
 
   const currentSong = usePlayerStore((s) => s.currentSong);
@@ -33,7 +44,7 @@ export function YouTubePlayer() {
   const currentSongRef = useRef(currentSong);
   currentSongRef.current = currentSong;
 
-  // Register seek callback for the NowPlaying seek slider
+  // Register seek callback
   useEffect(() => {
     registerSeekCallback((seconds: number) => {
       if (audioRef.current) {
@@ -48,7 +59,24 @@ export function YouTubePlayer() {
     if (!audio) return;
 
     const onTimeUpdate = () => setProgress(audio.currentTime);
-    const onLoadedMetadata = () => setDurationRef.current(audio.duration);
+    const onLoadedMetadata = () => {
+      if (
+        audio.duration &&
+        !Number.isNaN(audio.duration) &&
+        audio.duration > 0
+      ) {
+        setDurationRef.current(audio.duration);
+      }
+    };
+    const onDurationChange = () => {
+      if (
+        audio.duration &&
+        !Number.isNaN(audio.duration) &&
+        audio.duration > 0
+      ) {
+        setDurationRef.current(audio.duration);
+      }
+    };
     const onPlay = () => setIsPlayingRef.current(true);
     const onPause = () => setIsPlayingRef.current(false);
     const onEnded = () => {
@@ -79,80 +107,126 @@ export function YouTubePlayer() {
     };
     const onWaiting = () => setIsBuffering(true);
     const onCanPlay = () => setIsBuffering(false);
-    const onError = () => {
+    const onError = (e: Event) => {
+      const err = (e.target as HTMLAudioElement).error;
+      console.warn("Audio error:", err?.code, err?.message);
       setIsBuffering(false);
-      setIsPlayingRef.current(false);
+      const song = currentSongRef.current;
+      if (song && loadingVideoIdRef.current === song.videoId) {
+        loadingVideoIdRef.current = null;
+        setTimeout(() => {
+          usePlayerStore.setState((s) => ({ ...s }));
+        }, 500);
+      }
     };
+    const onStalled = () => setIsBuffering(true);
 
     audio.addEventListener("timeupdate", onTimeUpdate);
     audio.addEventListener("loadedmetadata", onLoadedMetadata);
+    audio.addEventListener("durationchange", onDurationChange);
     audio.addEventListener("play", onPlay);
     audio.addEventListener("pause", onPause);
     audio.addEventListener("ended", onEnded);
     audio.addEventListener("waiting", onWaiting);
+    audio.addEventListener("stalled", onStalled);
     audio.addEventListener("canplay", onCanPlay);
+    audio.addEventListener("canplaythrough", onCanPlay);
     audio.addEventListener("error", onError);
 
     return () => {
       audio.removeEventListener("timeupdate", onTimeUpdate);
       audio.removeEventListener("loadedmetadata", onLoadedMetadata);
+      audio.removeEventListener("durationchange", onDurationChange);
       audio.removeEventListener("play", onPlay);
       audio.removeEventListener("pause", onPause);
       audio.removeEventListener("ended", onEnded);
       audio.removeEventListener("waiting", onWaiting);
+      audio.removeEventListener("stalled", onStalled);
       audio.removeEventListener("canplay", onCanPlay);
+      audio.removeEventListener("canplaythrough", onCanPlay);
       audio.removeEventListener("error", onError);
     };
   }, [setProgress]);
 
-  // Load new stream when song changes
+  // Load new stream when song changes -- triggered by videoId change
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally keyed on videoId only; currentSong accessed via ref to avoid stale closures
   useEffect(() => {
-    const videoId = currentSong?.videoId ?? null;
-    if (prevVideoIdRef.current === videoId) return;
-    prevVideoIdRef.current = videoId;
+    const song = currentSongRef.current;
+    const videoId = song?.videoId ?? null;
+
+    if (loadingVideoIdRef.current === videoId && videoId !== null) return;
+    loadingVideoIdRef.current = videoId;
 
     const audio = audioRef.current;
     if (!audio) return;
 
-    if (!videoId || !currentSong) {
+    if (!videoId || !song) {
       audio.pause();
       audio.src = "";
+      setIsBuffering(false);
       return;
     }
 
     setIsBuffering(true);
-    cacheSongRef.current(currentSong);
-    recordRef.current(currentSong.videoId);
-    addToLocalHistory(currentSong);
+    cacheSongRef.current(song);
+    recordRef.current(song.videoId);
+    addToLocalHistory(song);
 
-    getStreamUrl(videoId)
-      .then((url) => {
-        audio.src = url;
+    const fetchingId = videoId;
+
+    pipedFetch(`/streams/${fetchingId}`)
+      .then((data) => {
+        if (loadingVideoIdRef.current !== fetchingId) return;
+
+        const d = data as PipedStreamsData;
+
+        if (d.duration && d.duration > 0) {
+          setDurationRef.current(d.duration);
+        }
+
+        const streams = d.audioStreams ?? [];
+        if (streams.length === 0) throw new Error("No audio streams");
+
+        const sorted = [...streams].sort(
+          (a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0),
+        );
+        const mp4 = sorted.find((s) => s.mimeType?.includes("audio/mp4"));
+        const webm = sorted.find((s) => s.mimeType?.includes("audio/webm"));
+        const best = mp4 ?? webm ?? sorted[0];
+
+        audio.pause();
+        audio.src = best.url;
         audio.load();
+
         if (usePlayerStore.getState().isPlaying) {
-          return audio.play();
+          const playPromise = audio.play();
+          if (playPromise !== undefined) {
+            playPromise.catch((err) => {
+              console.warn("Autoplay blocked:", err);
+            });
+          }
         }
       })
-      .catch(() => {
+      .catch((err) => {
+        if (loadingVideoIdRef.current !== fetchingId) return;
+        console.error("Stream fetch failed:", err);
         setIsBuffering(false);
         setIsPlayingRef.current(false);
       });
   }, [currentSong]);
 
-  // Sync play/pause state changes (when same song)
+  // Sync play/pause state
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio) return;
-    const videoId = currentSong?.videoId ?? null;
-    if (prevVideoIdRef.current !== videoId) return;
-    if (!audio.src) return;
+    if (!audio || !audio.src) return;
 
     if (isPlaying) {
-      audio.play().catch(() => {});
+      const p = audio.play();
+      if (p !== undefined) p.catch(() => {});
     } else {
       audio.pause();
     }
-  }, [isPlaying, currentSong?.videoId]);
+  }, [isPlaying]);
 
   // Volume changes
   useEffect(() => {
@@ -161,7 +235,7 @@ export function YouTubePlayer() {
     }
   }, [volume]);
 
-  // Media Session API -- works with native <audio> elements
+  // Media Session API
   useEffect(() => {
     if (!currentSong || !("mediaSession" in navigator)) return;
 
@@ -185,9 +259,7 @@ export function YouTubePlayer() {
       nextRef.current(),
     );
     navigator.mediaSession.setActionHandler("previoustrack", () => {
-      if (audioRef.current) {
-        audioRef.current.currentTime = 0;
-      }
+      if (audioRef.current) audioRef.current.currentTime = 0;
     });
     navigator.mediaSession.setActionHandler("seekto", (details) => {
       if (details.seekTime !== undefined && audioRef.current) {
@@ -202,7 +274,7 @@ export function YouTubePlayer() {
     navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
   }, [isPlaying]);
 
-  // Update mediaSession position state for lock screen scrubber
+  // Update mediaSession position state
   useEffect(() => {
     if (!("mediaSession" in navigator) || !audioRef.current) return;
     const audio = audioRef.current;
@@ -230,6 +302,7 @@ export function YouTubePlayer() {
         ref={audioRef}
         playsInline
         preload="auto"
+        crossOrigin="anonymous"
         style={{ display: "none" }}
       />
       {isBuffering && currentSong && (
@@ -244,7 +317,7 @@ export function YouTubePlayer() {
           }}
           className="bg-black/70 text-white text-xs px-3 py-1 rounded-full"
         >
-          Buffering…
+          Loading…
         </div>
       )}
     </>

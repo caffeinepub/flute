@@ -1,14 +1,12 @@
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Toaster } from "@/components/ui/sonner";
-import { Music2 } from "lucide-react";
-import { motion } from "motion/react";
+import { Play, X } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
+import type { Song } from "./backend";
 import { BottomNav } from "./components/BottomNav";
 import { PlayerBar } from "./components/Player/PlayerBar";
 import { YouTubePlayer } from "./components/Player/YouTubePlayer";
 import { Sidebar } from "./components/Sidebar/Sidebar";
-import { useLocalAuth } from "./hooks/useLocalAuth";
 import { loadSavedTheme } from "./lib/theme";
 import { History } from "./pages/History";
 import { Home } from "./pages/Home";
@@ -25,81 +23,18 @@ import { loadLastSong, usePlayerStore } from "./store/playerStore";
 // Apply saved theme on startup
 loadSavedTheme();
 
-function SignInPage() {
-  const { login, loginAsGuest } = useLocalAuth();
-  const [username, setUsername] = useState("");
-
-  const handleLogin = () => {
-    const trimmed = username.trim();
-    if (!trimmed) return;
-    login(trimmed);
-  };
-
-  return (
-    <div className="min-h-screen bg-background flex items-center justify-center">
-      <motion.div
-        initial={{ opacity: 0, y: 24 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="flex flex-col items-center gap-6 p-10 bg-card rounded-2xl shadow-card w-full max-w-sm mx-4"
-      >
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-full bg-primary flex items-center justify-center">
-            <Music2 className="w-6 h-6 text-primary-foreground" />
-          </div>
-          <span className="text-3xl font-bold tracking-tight text-foreground">
-            Flute
-          </span>
-        </div>
-        <div className="text-center">
-          <h1 className="text-xl font-semibold text-foreground">
-            Welcome to Flute
-          </h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            Your personal music universe
-          </p>
-        </div>
-        <div className="w-full space-y-3">
-          <Input
-            data-ocid="signin.username_input"
-            placeholder="Choose a username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-            className="bg-accent border-border text-foreground h-11"
-            autoFocus
-          />
-          <Button
-            data-ocid="signin.primary_button"
-            className="w-full bg-primary text-primary-foreground hover:bg-primary/90 font-semibold h-12 rounded-full"
-            onClick={handleLogin}
-            disabled={!username.trim()}
-          >
-            Get Started
-          </Button>
-          <div className="relative flex items-center gap-3">
-            <div className="flex-1 h-px bg-border" />
-            <span className="text-xs text-muted-foreground">or</span>
-            <div className="flex-1 h-px bg-border" />
-          </div>
-          <Button
-            data-ocid="signin.guest_button"
-            variant="outline"
-            className="w-full h-11 rounded-full border-border text-foreground hover:bg-accent"
-            onClick={loginAsGuest}
-          >
-            Continue as Guest
-          </Button>
-        </div>
-        <p className="text-xs text-muted-foreground text-center">
-          Your data is stored locally in your browser.
-        </p>
-      </motion.div>
-    </div>
-  );
+interface MidSessionData {
+  song: Song;
+  queue: Song[];
+  queueIndex: number;
+  progress: number;
+  savedAt: number;
 }
 
 function MainLayout() {
   const { page, navigate, playlistId } = useNavigationStore();
+  const [showResumeBanner, setShowResumeBanner] = useState(false);
+  const [resumeData, setResumeData] = useState<MidSessionData | null>(null);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -121,8 +56,64 @@ function MainLayout() {
         isPlaying: false,
       });
     }
+
+    // Check for mid-session state (from switching away)
+    const raw = localStorage.getItem("flute_mid_session");
+    if (raw) {
+      try {
+        const data = JSON.parse(raw) as MidSessionData;
+        const AGE_24H = 24 * 60 * 60 * 1000;
+        if (Date.now() - data.savedAt < AGE_24H && data.song) {
+          setResumeData(data);
+          setShowResumeBanner(true);
+        }
+      } catch {
+        // ignore malformed data
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Save state when switching away
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        const { currentSong, queue, queueIndex, progress } =
+          usePlayerStore.getState();
+        if (currentSong) {
+          localStorage.setItem(
+            "flute_mid_session",
+            JSON.stringify({
+              song: currentSong,
+              queue,
+              queueIndex,
+              progress,
+              savedAt: Date.now(),
+            }),
+          );
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () =>
+      document.removeEventListener("visibilitychange", handleVisibility);
+  }, []);
+
+  const handleResume = () => {
+    if (!resumeData) return;
+    usePlayerStore.getState().playSong(resumeData.song, resumeData.queue);
+    // Seek after a short delay for the audio to load
+    setTimeout(() => {
+      usePlayerStore.getState().seekTo(resumeData.progress);
+    }, 800);
+    setShowResumeBanner(false);
+    localStorage.removeItem("flute_mid_session");
+  };
+
+  const handleDismissResume = () => {
+    setShowResumeBanner(false);
+    localStorage.removeItem("flute_mid_session");
+  };
 
   const isMeel = page === "meel";
 
@@ -162,6 +153,43 @@ function MainLayout() {
               : "flex-1 overflow-y-auto pb-24 lg:pb-24 pb-40"
           }
         >
+          {/* Resume banner */}
+          <AnimatePresence>
+            {showResumeBanner && resumeData && (
+              <motion.div
+                initial={{ opacity: 0, y: -12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -12 }}
+                transition={{ duration: 0.2 }}
+                data-ocid="resume.panel"
+                className="mx-4 mt-3 bg-primary/15 border border-primary/30 rounded-xl px-4 py-2 flex items-center gap-3 text-sm"
+              >
+                <Play className="w-4 h-4 text-primary shrink-0" />
+                <span className="flex-1 text-foreground truncate">
+                  Resume{" "}
+                  <span className="font-semibold text-primary">
+                    &ldquo;{resumeData.song.title}&rdquo;
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  data-ocid="resume.primary_button"
+                  onClick={handleResume}
+                  className="text-xs font-semibold text-primary hover:text-primary/80 px-2 py-1 rounded-lg hover:bg-primary/10 transition-colors shrink-0"
+                >
+                  Resume
+                </button>
+                <button
+                  type="button"
+                  data-ocid="resume.close_button"
+                  onClick={handleDismissResume}
+                  className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
           {renderPage()}
         </main>
       </div>
@@ -174,9 +202,5 @@ function MainLayout() {
 }
 
 export default function App() {
-  const { user } = useLocalAuth();
-
-  if (!user) return <SignInPage />;
-
   return <MainLayout />;
 }

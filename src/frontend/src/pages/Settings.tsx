@@ -3,17 +3,20 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Check,
+  ClipboardCopy,
   Clock,
   LogOut,
   Palette,
   RefreshCw,
   Settings as SettingsIcon,
+  Share2,
   User,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useLocalAuth } from "../hooks/useLocalAuth";
+import { getOrCreateSyncToken, resetSyncToken } from "../lib/syncToken";
 import {
   THEMES,
   type ThemeColor,
@@ -21,6 +24,11 @@ import {
   loadSavedTheme,
 } from "../lib/theme";
 import { usePlayerStore } from "../store/playerStore";
+
+interface BeforeInstallPromptEvent extends Event {
+  prompt(): Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+}
 
 const SLEEP_OPTIONS = [
   { label: "15 min", minutes: 15 },
@@ -49,10 +57,49 @@ export function Settings() {
   const [remaining, setRemaining] = useState<number>(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Sync token state
+  const [syncToken, setSyncToken] = useState(() => getOrCreateSyncToken());
+
+  // PWA install state
+  const [installPrompt, setInstallPrompt] = useState<Event | null>(null);
+  const [isInstalled, setIsInstalled] = useState(false);
+
   useEffect(() => {
     setEditName(user?.username || "");
     setActiveTheme(loadSavedTheme());
   }, [user]);
+
+  // PWA install prompt listener
+  useEffect(() => {
+    const handler = (e: Event) => {
+      e.preventDefault();
+      setInstallPrompt(e);
+    };
+    window.addEventListener("beforeinstallprompt", handler);
+
+    // Check if already installed
+    if (window.matchMedia("(display-mode: standalone)").matches) {
+      setIsInstalled(true);
+    }
+
+    const onInstalled = () => {
+      setIsInstalled(true);
+      setInstallPrompt(null);
+    };
+    window.addEventListener("appinstalled", onInstalled);
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handler);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
+  }, []);
+
+  const handleInstall = async () => {
+    if (!installPrompt) return;
+    const prompt = installPrompt as BeforeInstallPromptEvent;
+    await prompt.prompt();
+    setInstallPrompt(null);
+  };
 
   // Countdown tick
   useEffect(() => {
@@ -114,6 +161,35 @@ export function Settings() {
   const handleRefresh = () => {
     window.location.reload();
   };
+
+  const handleCopyToken = () => {
+    navigator.clipboard
+      .writeText(syncToken)
+      .then(() => toast.success("Token copied!"))
+      .catch(() => toast.error("Failed to copy"));
+  };
+
+  const handleResetToken = () => {
+    const newToken = resetSyncToken();
+    setSyncToken(newToken);
+    toast.success("New Sync Token generated");
+  };
+
+  const handleShareApp = () => {
+    const url = window.location.origin;
+    const text = `🎵 Join me on Flute! Use Sync Token: ${syncToken}\n${url}`;
+    if (navigator.share) {
+      navigator.share({ title: "Flute Music", text, url }).catch(() => {});
+    } else {
+      navigator.clipboard
+        .writeText(text)
+        .then(() => toast.success("Link copied to clipboard!"))
+        .catch(() => toast.error("Failed to copy"));
+    }
+  };
+
+  // Format token as pairs: AB CD EF
+  const formattedToken = `${syncToken.slice(0, 2)} ${syncToken.slice(2, 4)} ${syncToken.slice(4, 6)}`;
 
   return (
     <div className="px-4 py-8 max-w-2xl">
@@ -279,11 +355,131 @@ export function Settings() {
           </div>
         </motion.section>
 
-        {/* Refresh */}
+        {/* Sync Token */}
         <motion.section
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
+          className="bg-card rounded-xl p-5 shadow-card"
+        >
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-base">🔑</span>
+            <h2 className="text-lg font-semibold text-foreground">
+              Sync Token
+            </h2>
+          </div>
+          <p className="text-sm text-muted-foreground mb-5">
+            Share this code with friends to sync your music taste.
+          </p>
+
+          {/* Token display */}
+          <div className="flex flex-col items-center gap-4 py-4 px-4 rounded-xl bg-accent/60 border border-border mb-4">
+            <span
+              data-ocid="settings.panel"
+              className="tracking-[0.3em] font-mono text-3xl text-primary font-bold select-all"
+            >
+              {formattedToken}
+            </span>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                data-ocid="settings.primary_button"
+                onClick={handleCopyToken}
+                className="flex items-center gap-2 px-4 py-2 rounded-full bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
+              >
+                <ClipboardCopy className="w-4 h-4" />
+                Copy
+              </button>
+              <button
+                type="button"
+                data-ocid="settings.secondary_button"
+                onClick={handleResetToken}
+                title="Generate new token"
+                className="flex items-center gap-2 px-4 py-2 rounded-full border border-border text-muted-foreground hover:text-foreground hover:border-foreground/40 text-sm font-medium transition-colors"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Regenerate
+              </button>
+            </div>
+          </div>
+
+          <p className="text-xs text-muted-foreground text-center">
+            Your token:{" "}
+            <span className="font-mono text-foreground">{syncToken}</span>
+          </p>
+        </motion.section>
+
+        {/* Share App */}
+        <motion.section
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.12 }}
+          className="bg-card rounded-xl p-5 shadow-card"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-base font-semibold text-foreground">
+                Share Flute
+              </h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Invite friends with your Sync Token
+              </p>
+            </div>
+            <button
+              type="button"
+              data-ocid="settings.open_modal_button"
+              onClick={handleShareApp}
+              className="flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 text-primary hover:bg-primary/20 text-sm font-medium transition-colors border border-primary/20"
+            >
+              <Share2 className="w-4 h-4" />
+              Share
+            </button>
+          </div>
+        </motion.section>
+
+        {/* Install App */}
+        {(installPrompt || isInstalled) && (
+          <motion.section
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.13 }}
+            className="bg-card rounded-xl p-5 shadow-card"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-base font-semibold text-foreground">
+                  Install Flute
+                </h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {isInstalled
+                    ? "App is installed on your device"
+                    : "Add to your home screen for the best experience"}
+                </p>
+              </div>
+              {isInstalled ? (
+                <span className="flex items-center gap-2 px-4 py-2 rounded-full bg-green-500/10 text-green-400 text-sm font-medium border border-green-500/20">
+                  <Check className="w-4 h-4" />
+                  Installed
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  data-ocid="settings.install_button"
+                  onClick={handleInstall}
+                  className="flex items-center gap-2 px-4 py-2 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 text-sm font-medium transition-colors"
+                >
+                  Install App
+                </button>
+              )}
+            </div>
+          </motion.section>
+        )}
+
+        {/* Refresh */}
+        <motion.section
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.14 }}
           className="bg-card rounded-xl p-5 shadow-card"
         >
           <Button
@@ -303,7 +499,7 @@ export function Settings() {
         <motion.section
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.15 }}
+          transition={{ delay: 0.16 }}
           className="bg-card rounded-xl p-5 shadow-card"
         >
           <Button

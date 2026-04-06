@@ -49,6 +49,8 @@ interface PlayerState {
   seekTo: (seconds: number) => void;
   toggleShuffle: () => void;
   setRepeat: (mode: RepeatMode) => void;
+  clearQueue: () => void;
+  playNext: (song: Song) => void;
 }
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
@@ -171,4 +173,29 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
   toggleShuffle: () => set((s) => ({ shuffle: !s.shuffle })),
   setRepeat: (mode: RepeatMode) => set({ repeat: mode }),
+
+  clearQueue: () => {
+    set((s) => {
+      const q = s.currentSong ? [s.currentSong] : [];
+      return { queue: q, queueIndex: 0 };
+    });
+  },
+
+  playNext: (song: Song) => {
+    set((s) => {
+      const insertAt = s.queue.length === 0 ? 0 : s.queueIndex + 1;
+      const newQueue = [...s.queue];
+      newQueue.splice(insertAt, 0, song);
+      const newIdx = insertAt;
+      userSet(LAST_SONG_KEY, { song, queue: newQueue, queueIndex: newIdx });
+      return {
+        currentSong: song,
+        queue: newQueue,
+        queueIndex: newIdx,
+        isPlaying: true,
+        progress: 0,
+        duration: 0,
+      };
+    });
+  },
 }));

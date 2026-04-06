@@ -11,6 +11,7 @@ import {
   Music2,
   Pause,
   Play,
+  PlayCircle,
   Plus,
   RefreshCw,
   Repeat,
@@ -20,6 +21,7 @@ import {
   SkipForward,
   ThumbsDown,
   ThumbsUp,
+  Trash2,
   Volume2,
   VolumeX,
   X,
@@ -74,6 +76,8 @@ export function NowPlaying() {
     addToQueue,
     removeFromQueue,
     reorderQueue,
+    clearQueue,
+    playNext,
   } = usePlayerStore();
   const { goBack } = useNavigationStore();
   const { data: likedSongs = [] } = useLikedSongs();
@@ -113,24 +117,20 @@ export function NowPlaying() {
   const loadRelated = useCallback((videoId: string) => {
     setRelatedLoading(true);
     setRelatedError(false);
-    fetchRelatedSongs(videoId).then((songs) => {
-      setRelatedSongs(songs);
-      setRelatedLoading(false);
-      if (songs.length === 0) {
-        setRelatedError(true);
-      }
-      const state = usePlayerStore.getState();
-      const songsAhead = state.queue.length - (state.queueIndex + 1);
-      if (songsAhead < 3) {
-        const existingIds = new Set(state.queue.map((s) => s.videoId));
-        const toAdd = songs
-          .filter((s) => !existingIds.has(s.videoId))
-          .slice(0, 5);
-        for (const s of toAdd) {
-          state.addToQueue(s);
+    const song = usePlayerStore.getState().currentSong;
+    fetchRelatedSongs(videoId, song?.title, song?.channel)
+      .then((songs) => {
+        setRelatedSongs(songs);
+        setRelatedLoading(false);
+        if (songs.length === 0) {
+          setRelatedError(true);
         }
-      }
-    });
+        // NOTE: Do NOT add to queue here. Similar Songs and Queue are separate systems.
+      })
+      .catch(() => {
+        setRelatedLoading(false);
+        setRelatedError(true);
+      });
   }, []);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally keyed only on videoId
@@ -382,6 +382,41 @@ export function NowPlaying() {
         {/* Queue */}
         {activeTab === "queue" && (
           <div data-ocid="nowplaying.panel">
+            {/* Queue header with shuffle + clear */}
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-sm font-semibold text-foreground">
+                Up Next
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  data-ocid="queue.toggle"
+                  onClick={toggleShuffle}
+                  title="Shuffle"
+                  className={cn(
+                    "w-8 h-8 rounded-full flex items-center justify-center transition-colors",
+                    shuffle
+                      ? "bg-primary/20 text-primary"
+                      : "bg-accent text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Shuffle className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  data-ocid="queue.delete_button"
+                  onClick={() => {
+                    clearQueue();
+                    toast.success("Queue cleared");
+                  }}
+                  title="Clear queue"
+                  className="w-8 h-8 rounded-full bg-accent hover:bg-red-500/20 hover:text-red-400 text-muted-foreground flex items-center justify-center transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
             {queue.length === 0 ? (
               <div
                 data-ocid="nowplaying.empty_state"
@@ -391,7 +426,7 @@ export function NowPlaying() {
                 <p className="text-muted-foreground">Queue is empty</p>
               </div>
             ) : (
-              <ScrollArea className="h-[60vh]">
+              <ScrollArea className="h-[55vh]">
                 <div className="space-y-2 pr-2">
                   {queue.map((song, i) => {
                     const isCurrent =
@@ -458,8 +493,17 @@ export function NowPlaying() {
                           </div>
                         </button>
 
-                        {/* Feedback + remove */}
+                        {/* Play Now + Feedback + remove */}
                         <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <button
+                            type="button"
+                            data-ocid={`queue.primary_button.${i + 1}`}
+                            title="Play now"
+                            onClick={() => playNext(song)}
+                            className="w-8 h-8 rounded-full bg-primary/10 text-primary hover:bg-primary/25 flex items-center justify-center transition-colors"
+                          >
+                            <PlayCircle className="w-3.5 h-3.5" />
+                          </button>
                           <button
                             type="button"
                             data-ocid={`queue.toggle.${i + 1}`}
@@ -526,7 +570,10 @@ export function NowPlaying() {
                   <button
                     type="button"
                     data-ocid="related.secondary_button"
-                    onClick={() => loadRelated(currentVideoId)}
+                    onClick={() => {
+                      if (!currentVideoId) return;
+                      loadRelated(currentVideoId);
+                    }}
                     className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-accent hover:bg-primary/20 text-sm font-medium text-muted-foreground hover:text-primary transition-colors"
                   >
                     <RefreshCw className="w-4 h-4" />

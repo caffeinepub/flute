@@ -9,6 +9,8 @@ const PIPED_INSTANCES = [
   "https://pipedapi.adminforge.de",
   "https://piped.drgns.space",
   "https://api.piped.private.coffee",
+  "https://pipedapi.reallyaweso.me",
+  "https://pipedapi.coldmilk.com",
 ];
 
 export interface InvidiousVideo {
@@ -45,7 +47,10 @@ interface PipedStreamsResponse {
 }
 
 function pipedToInvidious(item: PipedItem): InvidiousVideo | null {
-  const match = item.url?.match(/[?&]v=([^&]+)/);
+  const match =
+    item.url?.match(/[?&]v=([^&]+)/) ||
+    item.url?.match(/\/watch\?v=([^&]+)/) ||
+    item.url?.match(/\/([a-zA-Z0-9_-]{11})$/);
   if (!match) return null;
   const videoId = match[1];
   return {
@@ -63,71 +68,79 @@ function pipedToInvidious(item: PipedItem): InvidiousVideo | null {
   };
 }
 
-// Race all instances in parallel -- first success wins
-export async function pipedFetch(path: string): Promise<unknown> {
-  const results = await Promise.allSettled(
-    PIPED_INSTANCES.map((instance) =>
-      fetch(`${instance}${path}`, { signal: AbortSignal.timeout(8000) }).then(
-        (res) => {
-          if (!res.ok) throw new Error(`${res.status}`);
-          return res.json() as Promise<unknown>;
-        },
-      ),
-    ),
-  );
-  const first = results.find((r) => r.status === "fulfilled");
-  if (first && first.status === "fulfilled") return first.value;
-  throw new Error(
-    "All Piped instances failed. Check your internet connection.",
-  );
+// Helper: fetch from a single instance with timeout
+function fetchFromInstance(instance: string, path: string): Promise<unknown> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  return fetch(`${instance}${path}`, { signal: controller.signal })
+    .then((res) => {
+      clearTimeout(timer);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json() as Promise<unknown>;
+    })
+    .catch((err) => {
+      clearTimeout(timer);
+      throw err;
+    });
 }
 
-// For search: race all instances, pick first with non-empty music results
+// Race all instances in parallel -- FIRST success wins (true Promise.any behavior)
+export async function pipedFetch(path: string): Promise<unknown> {
+  try {
+    return await Promise.any(
+      PIPED_INSTANCES.map((instance) => fetchFromInstance(instance, path)),
+    );
+  } catch {
+    throw new Error(
+      "All Piped instances failed. Check your internet connection.",
+    );
+  }
+}
+
+// For search: race all instances, pick first with non-empty results
 async function pipedSearchFetch(path: string): Promise<{ items: PipedItem[] }> {
-  const results = await Promise.allSettled(
-    PIPED_INSTANCES.map((instance) =>
-      fetch(`${instance}${path}`, { signal: AbortSignal.timeout(8000) }).then(
-        async (res) => {
-          if (!res.ok) throw new Error(`${res.status}`);
-          const data = (await res.json()) as { items: PipedItem[] };
-          const filtered = (data?.items ?? []).filter(
+  try {
+    const result = await Promise.any(
+      PIPED_INSTANCES.map((instance) =>
+        fetchFromInstance(instance, path).then((data) => {
+          const d = data as { items: PipedItem[] };
+          const filtered = (d?.items ?? []).filter(
             (item) => item.type !== "channel" && item.type !== "playlist",
           );
           if (filtered.length === 0) throw new Error("empty");
-          return data;
-        },
+          return d;
+        }),
       ),
-    ),
-  );
-
-  const first = results.find((r) => r.status === "fulfilled");
-  if (first && first.status === "fulfilled")
-    return first.value as { items: PipedItem[] };
-
-  throw new Error(
-    "Can't connect to music service. Check your internet connection and try again.",
-  );
+    );
+    return result as { items: PipedItem[] };
+  } catch {
+    throw new Error(
+      "Can't connect to music service. Check your internet connection and try again.",
+    );
+  }
 }
 
 /**
  * Fetch the best audio stream URL for a video.
- * Prefers audio/mp4 then audio/webm at highest bitrate.
+ * Races all instances -- returns the first working stream URL.
  */
-export async function getStreamUrl(videoId: string): Promise<string> {
+export async function getStreamUrl(
+  videoId: string,
+): Promise<{ url: string; duration: number }> {
   const data = (await pipedFetch(
     `/streams/${videoId}`,
   )) as PipedStreamsResponse;
   const streams = data?.audioStreams ?? [];
   if (streams.length === 0) throw new Error("No audio streams found");
 
-  // Prefer mp4, then webm, sorted by bitrate descending
+  // Prefer mp4 (most compatible), then webm, sorted by bitrate descending
   const sorted = [...streams].sort(
     (a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0),
   );
   const mp4 = sorted.find((s) => s.mimeType?.includes("audio/mp4"));
   const webm = sorted.find((s) => s.mimeType?.includes("audio/webm"));
   const best = mp4 ?? webm ?? sorted[0];
-  return best.url;
+  return { url: best.url, duration: data.duration ?? 0 };
 }
 
 export function formatDuration(seconds: number): string {
