@@ -1,7 +1,11 @@
 import { create } from "zustand";
 import { pipedFetch } from "../lib/invidious";
 import type { Song } from "../types/song";
+import { refetchStreamData } from "../utils/pipedRecommendations";
 import { userGet, userSet } from "../utils/userStorage";
+
+// ISSUE 5 FIX: track all videoIds played in this session to prevent queue loops
+export const sessionPlayedIds = new Set<string>();
 
 export type RepeatMode = "none" | "one" | "all";
 export type PlaybackSource = "queue" | "similar";
@@ -106,7 +110,28 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
   fixSong: async (videoId: string) => {
     try {
-      // Re-fetch from Piped with a fresh request (cache bypassed)
+      // ISSUE 3 FIX: Use refetchStreamData which races all instances simultaneously
+      const refetched = await refetchStreamData(videoId);
+      if (refetched?.streamUrl && refetched.duration > 0) {
+        // Remove from broken array
+        set((s) => ({
+          brokenSongs: s.brokenSongs.filter((id) => id !== videoId),
+        }));
+
+        const { currentSong, queue, queueIndex } = get();
+        if (currentSong?.videoId === videoId) {
+          set({
+            currentSong: { ...currentSong },
+            isPlaying: true,
+            progress: 0,
+            duration: refetched.duration,
+          });
+          userSet(LAST_SONG_KEY, { song: currentSong, queue, queueIndex });
+        }
+        return;
+      }
+
+      // Fallback: original pipedFetch approach
       const data = (await pipedFetch(
         `/streams/${videoId}`,
       )) as PipedStreamsData;
@@ -122,15 +147,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
       if (!best?.url) throw new Error("No valid stream");
 
-      // Remove from broken array
       set((s) => ({
         brokenSongs: s.brokenSongs.filter((id) => id !== videoId),
       }));
 
-      // If it's the currently playing song, trigger re-load by toggling the song
       const { currentSong, queue, queueIndex } = get();
       if (currentSong?.videoId === videoId) {
-        // Re-trigger by re-setting the current song (YouTubePlayer watches currentSong)
         set({
           currentSong: { ...currentSong },
           isPlaying: true,
@@ -163,6 +185,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     const newQueue = queue || [song];
     const idx = newQueue.findIndex((s) => s.videoId === song.videoId);
     const queueIndex = idx >= 0 ? idx : 0;
+    // ISSUE 5 FIX: record in session history
+    sessionPlayedIds.add(song.videoId);
     set({
       currentSong: song,
       queue: newQueue,
@@ -178,11 +202,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   playSongFromSimilar: (song: Song, similarList: Song[]) => {
     const idx = similarList.findIndex((s) => s.videoId === song.videoId);
     const similarQueueIndex = idx >= 0 ? idx : 0;
-    // Replace queue with [currentSong, ...similarList] for continuous recommendation playback
     const newQueue = [
       song,
       ...similarList.filter((s) => s.videoId !== song.videoId),
     ];
+    // ISSUE 5 FIX: record in session history
+    sessionPlayedIds.add(song.videoId);
     set({
       currentSong: song,
       queue: newQueue,
@@ -229,6 +254,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         return;
       }
       const nextSong = similarQueue[nextIdx];
+      // ISSUE 5 FIX: record in session history
+      sessionPlayedIds.add(nextSong.videoId);
       set({
         currentSong: nextSong,
         similarQueueIndex: nextIdx,
@@ -252,8 +279,11 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       set({ isPlaying: false });
       return;
     }
+    const nextSong = queue[nextIdx];
+    // ISSUE 5 FIX: record in session history
+    sessionPlayedIds.add(nextSong.videoId);
     set({
-      currentSong: queue[nextIdx],
+      currentSong: nextSong,
       queueIndex: nextIdx,
       isPlaying: true,
       progress: 0,

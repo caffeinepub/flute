@@ -206,11 +206,15 @@ export function NowPlaying() {
   };
 
   const handleRelatedSongClick = (song: Song) => {
+    // ISSUE 2 FIX: clicking a related song always sets source to similar and plays from that list
+    setCurrentSource("similar");
     playSongFromSimilar(song, relatedSongs);
   };
 
+  // ISSUE 2 FIX: "Add to Queue" routes based on ACTIVE TAB, not currentSource
+  // (currentSource can lag briefly if user taps add without first switching tabs)
   const handleAddToCurrentTab = (song: Song) => {
-    if (currentSource === "similar") {
+    if (activeTab === "related") {
       // Add to similarQueue and also to relatedSongs local display list
       addToSimilar(song);
       setRelatedSongs((prev) => {
@@ -778,7 +782,7 @@ export function NowPlaying() {
                             type="button"
                             data-ocid={`related.add_button.${i + 1}`}
                             title={
-                              currentSource === "similar"
+                              activeTab === "related"
                                 ? "Add to Similar Songs"
                                 : "Add to Queue"
                             }

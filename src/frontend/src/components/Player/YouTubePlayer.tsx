@@ -1,9 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useCacheSong, useRecordListening } from "../../hooks/useQueries";
 import { pipedFetch } from "../../lib/invidious";
-import { registerSeekCallback, usePlayerStore } from "../../store/playerStore";
+import {
+  registerSeekCallback,
+  sessionPlayedIds,
+  usePlayerStore,
+} from "../../store/playerStore";
 import { addToLocalHistory } from "../../utils/localHistory";
-import { fetchRelatedSongs } from "../../utils/pipedRecommendations";
+import {
+  fetchRelatedSongs,
+  refetchStreamData,
+} from "../../utils/pipedRecommendations";
 
 interface PipedAudioStream {
   url: string;
@@ -18,12 +25,16 @@ interface PipedStreamsData {
 
 // How long to wait before re-triggering sticky notification (ms)
 const STICKY_NOTIFICATION_DELAY = 4000;
+// Max retries for broken streams (duration=0 or error)
+const MAX_STREAM_RETRIES = 2;
 
 export function YouTubePlayer() {
   const audioRef = useRef<HTMLAudioElement>(null);
   const loadingVideoIdRef = useRef<string | null>(null);
   const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stickyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // ISSUE 3 FIX: track retry count per videoId
+  const retryCountRef = useRef<Map<string, number>>(new Map());
   const [isBuffering, setIsBuffering] = useState(false);
 
   const currentSong = usePlayerStore((s) => s.currentSong);
@@ -65,14 +76,48 @@ export function YouTubePlayer() {
     });
   }, []);
 
-  // FIX 8 — Helper: mark broken and clear stall timer
-  const handleBroken = useCallback((videoId: string) => {
-    if (stallTimerRef.current) {
-      clearTimeout(stallTimerRef.current);
-      stallTimerRef.current = null;
+  // ISSUE 3 FIX: helper to retry stream fetch from different instances
+  const retryStream = useCallback(async (videoId: string) => {
+    const retries = retryCountRef.current.get(videoId) ?? 0;
+    if (retries >= MAX_STREAM_RETRIES) {
+      // Exhausted retries — mark broken
+      markBrokenRef.current(videoId);
+      return;
     }
-    markBrokenRef.current(videoId);
+    retryCountRef.current.set(videoId, retries + 1);
+
+    const data = await refetchStreamData(videoId);
+    if (!data || !data.streamUrl || data.duration <= 0) {
+      // Still bad — mark broken
+      markBrokenRef.current(videoId);
+      return;
+    }
+
+    const audio = audioRef.current;
+    if (!audio || loadingVideoIdRef.current !== videoId) return;
+
+    setDurationRef.current(data.duration);
+    audio.pause();
+    audio.src = data.streamUrl;
+    audio.load();
+
+    if (usePlayerStore.getState().isPlaying) {
+      audio.play().catch(() => {});
+    }
   }, []);
+
+  // FIX 8 — Helper: mark broken and clear stall timer
+  const handleBroken = useCallback(
+    (videoId: string) => {
+      if (stallTimerRef.current) {
+        clearTimeout(stallTimerRef.current);
+        stallTimerRef.current = null;
+      }
+      // ISSUE 3 FIX: try retry first before marking broken
+      retryStream(videoId);
+    },
+    [retryStream],
+  );
 
   // Wire up audio element events once on mount
   useEffect(() => {
@@ -81,7 +126,6 @@ export function YouTubePlayer() {
 
     const onTimeUpdate = () => {
       setProgress(audio.currentTime);
-      // Reset stall timer on progress
       if (stallTimerRef.current) {
         clearTimeout(stallTimerRef.current);
         stallTimerRef.current = null;
@@ -94,8 +138,11 @@ export function YouTubePlayer() {
         audio.duration > 0
       ) {
         setDurationRef.current(audio.duration);
+        // Reset retry counter on success
+        const song = currentSongRef.current;
+        if (song) retryCountRef.current.delete(song.videoId);
       } else {
-        // FIX 8 — duration is 0 after metadata load → broken
+        // ISSUE 3 FIX: duration is 0 after metadata load → retry stream fetch
         const song = currentSongRef.current;
         if (song) handleBroken(song.videoId);
       }
@@ -121,16 +168,27 @@ export function YouTubePlayer() {
         if (isAtEnd) {
           const song = currentSongRef.current;
           if (song) {
-            fetchRelatedSongs(song.videoId, song.title, song.channel)
+            // ISSUE 5 FIX: pass sessionPlayedIds so we never repeat already-heard songs
+            fetchRelatedSongs(
+              song.videoId,
+              song.title,
+              song.channel,
+              sessionPlayedIds,
+            )
               .then((results) => {
-                const nextSong = results.find(
-                  (r) => r.videoId !== song.videoId,
+                // Filter out any IDs already in session history
+                const fresh = results.filter(
+                  (r) =>
+                    r.videoId !== song.videoId &&
+                    !sessionPlayedIds.has(r.videoId),
                 );
+                const nextSong = fresh[0] ?? results[0];
                 if (nextSong) {
-                  usePlayerStore.getState().appendSimilarToQueue(results);
                   usePlayerStore
                     .getState()
-                    .playSong(nextSong, [...usePlayerStore.getState().queue]);
+                    .appendSimilarToQueue(fresh.length > 0 ? fresh : results);
+                  const updatedQueue = usePlayerStore.getState().queue;
+                  usePlayerStore.getState().playSong(nextSong, updatedQueue);
                 } else {
                   setIsPlayingRef.current(false);
                 }
@@ -148,7 +206,7 @@ export function YouTubePlayer() {
     };
     const onWaiting = () => {
       setIsBuffering(true);
-      // FIX 8 — if stalled for 3+ seconds with no progress, mark broken
+      // If stalled for 3+ seconds with no progress, trigger retry
       const song = currentSongRef.current;
       if (song) {
         stallTimerRef.current = setTimeout(() => {
@@ -176,12 +234,9 @@ export function YouTubePlayer() {
       setIsBuffering(false);
       const song = currentSongRef.current;
       if (song && loadingVideoIdRef.current === song.videoId) {
-        // FIX 8 — mark as broken on audio error
+        // ISSUE 3 FIX: retry before marking broken
         handleBroken(song.videoId);
         loadingVideoIdRef.current = null;
-        setTimeout(() => {
-          usePlayerStore.setState((s) => ({ ...s }));
-        }, 500);
       }
     };
     const onStalled = () => {
@@ -239,9 +294,13 @@ export function YouTubePlayer() {
     cacheSongRef.current(song);
     recordRef.current(song.videoId);
     addToLocalHistory(song);
+    // ISSUE 5 FIX: mark this song as played in session
+    sessionPlayedIds.add(videoId);
+    // Reset retry counter for new song
+    retryCountRef.current.delete(videoId);
 
     // Auto-fill queue with similar songs in the background
-    fetchRelatedSongs(song.videoId, song.title, song.channel)
+    fetchRelatedSongs(song.videoId, song.title, song.channel, sessionPlayedIds)
       .then((similar) => {
         if (similar.length > 0) {
           usePlayerStore.getState().appendSimilarToQueue(similar);
@@ -289,7 +348,7 @@ export function YouTubePlayer() {
         console.error("Stream fetch failed:", err);
         setIsBuffering(false);
         setIsPlayingRef.current(false);
-        // Mark broken on stream fetch failure
+        // ISSUE 3 FIX: retry before marking broken
         handleBroken(fetchingId);
       });
   }, [currentSong]);
@@ -374,14 +433,13 @@ export function YouTubePlayer() {
     return () => audio.removeEventListener("timeupdate", updatePosition);
   }, []);
 
-  // FIX 10 — Sticky notification: re-trigger Media Session metadata on visibility change
+  // Sticky notification: re-trigger Media Session metadata on visibility change
   useEffect(() => {
     if (!("mediaSession" in navigator)) return;
 
     const handleVisibilityChange = () => {
-      if (document.hidden) return; // page hidden, no action
+      if (document.hidden) return;
 
-      // Page became visible — if sticky and playing, re-assert metadata after a short delay
       if (
         stickyNotificationRef.current &&
         usePlayerStore.getState().isPlaying
@@ -390,7 +448,6 @@ export function YouTubePlayer() {
         stickyTimerRef.current = setTimeout(() => {
           const song = currentSongRef.current;
           if (!song || !("mediaSession" in navigator)) return;
-          // Re-set metadata to re-show the notification
           navigator.mediaSession.metadata = new MediaMetadata({
             title: song.title,
             artist: song.channel,
@@ -412,13 +469,11 @@ export function YouTubePlayer() {
       }
     };
 
-    // Also trigger when notification might be dismissed: poll every ~5s while playing
     const stickyPoll = setInterval(() => {
       if (!stickyNotificationRef.current) return;
       if (!usePlayerStore.getState().isPlaying) return;
       const song = currentSongRef.current;
       if (!song) return;
-      // Re-assert metadata to keep notification alive
       try {
         navigator.mediaSession.metadata = new MediaMetadata({
           title: song.title,

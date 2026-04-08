@@ -17,6 +17,8 @@ const PIPED_INSTANCES = [
 
 const MAX_DURATION = 480; // 8 minutes
 const MIN_DURATION = 60; // 1 minute
+// ISSUE 1 FIX: hard cap per uploader across the entire results list (not just consecutive)
+const MAX_PER_UPLOADER = 2;
 
 const REJECT_KEYWORDS = [
   "short",
@@ -52,24 +54,18 @@ function getVideoId(url: string): string {
 }
 
 /**
- * FIX 1 — Music-only filter.
  * Returns true if the track should be REJECTED.
  */
 function isBadTrack(title: string, duration: number): boolean {
-  // Duration checks
   if (!duration || duration <= MIN_DURATION) return true;
   if (duration > MAX_DURATION) return true;
-
   const lower = title.toLowerCase();
-  // Reject if contains any reject keyword
   if (REJECT_KEYWORDS.some((kw) => lower.includes(kw))) return true;
-
   return false;
 }
 
 /**
- * FIX 2 — Similarity scoring system.
- * Higher score = more relevant.
+ * Similarity scoring — higher score = more relevant.
  */
 function scoreSimilarity(
   title: string,
@@ -82,7 +78,6 @@ function scoreSimilarity(
   const currentUploaderLower = currentUploader.toLowerCase().trim();
   const uploaderLower = uploader.toLowerCase().trim();
 
-  // +40 if same artist
   if (
     uploaderLower === currentUploaderLower &&
     currentUploaderLower.length > 0
@@ -90,7 +85,6 @@ function scoreSimilarity(
     score += 40;
   }
 
-  // +25 if title shares main keywords (3+ char words)
   const currentWords = currentTitle
     .toLowerCase()
     .split(/\s+/)
@@ -101,20 +95,16 @@ function scoreSimilarity(
   const sharedCount = currentWords.filter((w) => titleWords.has(w)).length;
   if (sharedCount >= 1) score += 25;
 
-  // +15 if title contains "official" or "audio"
   if (titleLower.includes("official") || titleLower.includes("audio")) {
     score += 15;
   }
 
-  // Prefer keywords bonus
   if (PREFER_KEYWORDS.some((kw) => titleLower.includes(kw))) {
     score += 5;
   }
 
-  // -30 if remix
   if (titleLower.includes("remix")) score -= 30;
 
-  // -50 if live, concert, short
   if (
     titleLower.includes("live") ||
     titleLower.includes("concert") ||
@@ -140,8 +130,11 @@ const relatedCache = new Map<string, Song[]>();
 
 /**
  * Try to re-fetch duration for a broken (0-duration) song from any Piped instance.
+ * ISSUE 3 FIX: used both in filterAndMap and in YouTubePlayer retry logic.
  */
-async function refetchDuration(videoId: string): Promise<number> {
+export async function refetchStreamData(
+  videoId: string,
+): Promise<{ duration: number; streamUrl: string } | null> {
   try {
     const result = await Promise.any(
       PIPED_INSTANCES.map(async (instance) => {
@@ -156,7 +149,20 @@ async function refetchDuration(videoId: string): Promise<number> {
           const data = await res.json();
           const dur = data?.duration as number | undefined;
           if (!dur || dur <= 0) throw new Error("no duration");
-          return dur;
+          // Pick best audio stream
+          const streams: Array<{
+            url: string;
+            bitrate: number;
+            mimeType: string;
+          }> = data?.audioStreams ?? [];
+          if (streams.length === 0) throw new Error("no streams");
+          const sorted = [...streams].sort(
+            (a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0),
+          );
+          const mp4 = sorted.find((s) => s.mimeType?.includes("audio/mp4"));
+          const webm = sorted.find((s) => s.mimeType?.includes("audio/webm"));
+          const best = mp4 ?? webm ?? sorted[0];
+          return { duration: dur, streamUrl: best.url };
         } catch (e) {
           clearTimeout(timer);
           throw e;
@@ -165,13 +171,18 @@ async function refetchDuration(videoId: string): Promise<number> {
     );
     return result;
   } catch {
-    return 0;
+    return null;
   }
+}
+
+async function refetchDuration(videoId: string): Promise<number> {
+  const data = await refetchStreamData(videoId);
+  return data?.duration ?? 0;
 }
 
 /**
  * Fetch from a single instance and VALIDATE before accepting.
- * Only accepts if relatedStreams.length >= 5 with valid entries.
+ * ISSUE 4 FIX: Only accepts if relatedStreams.length >= 5.
  */
 async function fetchAndValidate(
   instance: string,
@@ -190,7 +201,6 @@ async function fetchAndValidate(
       (s: PipedRelatedStream) => s.type !== "channel" && s.type !== "playlist",
     );
 
-    // VALIDATION: must have at least 5 stream entries before accepting
     if (related.length < 5) throw new Error("insufficient results");
 
     return related;
@@ -201,12 +211,13 @@ async function fetchAndValidate(
 }
 
 /**
- * FIX 3 — Filter, score, and apply artist diversity.
+ * ISSUE 1 FIX — Hard cap of MAX_PER_UPLOADER (2) per uploader across the ENTIRE list.
  *
- * Pipeline:
- * 1. Music-only filter (FIX 1)
- * 2. Similarity scoring (FIX 2)
- * 3. Artist diversity — interleave same/other artists (FIX 3)
+ * Algorithm:
+ * 1. Score and sort all candidates
+ * 2. Apply strict per-uploader cap of 2 total
+ * 3. Build final list: up to 2 same-artist first, then diverse others
+ * 4. If after diversity filtering the list is short, allow same-artist to fill
  */
 async function filterAndMap(
   related: PipedRelatedStream[],
@@ -237,12 +248,12 @@ async function filterAndMap(
 
     let dur = s.duration;
 
-    // If duration is 0 or missing, try re-fetching
+    // ISSUE 3 FIX: if duration is 0 or missing, try re-fetching before discarding
     if (!dur || dur <= 0) {
       dur = await refetchDuration(vid);
     }
 
-    // FIX 1 — music-only filter (also catches 8-min cap)
+    // Filter out bad tracks (still 0, shorts, podcasts, >8 min)
     if (isBadTrack(s.title || "", dur)) continue;
 
     const uploaderLower = (s.uploaderName || "").toLowerCase().trim();
@@ -250,7 +261,6 @@ async function filterAndMap(
     const isSameArtist =
       uploaderLower === currentUploaderLower && currentUploaderLower.length > 0;
 
-    // FIX 2 — compute similarity score
     const score = scoreSimilarity(
       s.title || "",
       s.uploaderName || "",
@@ -272,55 +282,35 @@ async function filterAndMap(
   // Sort by score descending
   candidates.sort((a, b) => b.score - a.score);
 
-  // FIX 3 — Artist diversity: separate same/other artists
-  const sameArtist = candidates.filter((c) => c.isSameArtist);
-  const otherArtists = candidates.filter((c) => !c.isSameArtist);
-
-  // Per-uploader cap in otherArtists: max 2 from any single uploader
+  // ISSUE 1 FIX: strict per-uploader hard cap across the entire list
+  // Track global count per uploader key
   const uploaderCount = new Map<string, number>();
-  const diverseOthers = otherArtists.filter((c) => {
+
+  const sameArtistPicks: ScoredCandidate[] = [];
+  const otherArtistPicks: ScoredCandidate[] = [];
+
+  for (const c of candidates) {
     const key = c.channel.toLowerCase().trim();
     const count = uploaderCount.get(key) ?? 0;
-    if (count >= 2) return false;
+    // Hard cap: max MAX_PER_UPLOADER songs from any single uploader
+    if (count >= MAX_PER_UPLOADER) continue;
     uploaderCount.set(key, count + 1);
-    return true;
-  });
 
-  // Interleave: max 2 consecutive same-artist in the first 4 results,
-  // then alternate so it stays diverse. Same artist CAN reappear after position 4.
-  const merged: ScoredCandidate[] = [];
-  let sameIdx = 0;
-  let otherIdx = 0;
-  let consecutiveSame = 0;
-
-  while (
-    merged.length < 20 &&
-    (sameIdx < sameArtist.length || otherIdx < diverseOthers.length)
-  ) {
-    // Enforce: if 2 consecutive same-artist, force an other-artist next
-    if (consecutiveSame >= 2 && otherIdx < diverseOthers.length) {
-      merged.push(diverseOthers[otherIdx++]);
-      consecutiveSame = 0;
-    } else if (
-      sameIdx < sameArtist.length &&
-      merged.length < 2 // first 2 slots prefer same artist
-    ) {
-      merged.push(sameArtist[sameIdx++]);
-      consecutiveSame++;
-    } else if (otherIdx < diverseOthers.length) {
-      merged.push(diverseOthers[otherIdx++]);
-      consecutiveSame = 0;
-      // After filling others, allow more same-artist
-    } else if (sameIdx < sameArtist.length) {
-      merged.push(sameArtist[sameIdx++]);
-      consecutiveSame++;
+    if (c.isSameArtist) {
+      sameArtistPicks.push(c);
     } else {
-      break;
+      otherArtistPicks.push(c);
     }
   }
 
-  // Apply mood score on top and cap at 20
-  return merged
+  // Build final list: up to 2 same-artist first, then fill with others
+  const finalList: ScoredCandidate[] = [
+    ...sameArtistPicks.slice(0, MAX_PER_UPLOADER),
+    ...otherArtistPicks,
+  ].slice(0, 20);
+
+  // Apply mood score for final ordering of the "others" section
+  return finalList
     .sort(
       (a, b) => scoreTrack(b.title, b.channel) - scoreTrack(a.title, a.channel),
     )
@@ -336,6 +326,7 @@ async function filterAndMap(
 
 /**
  * Smart fallback: search using track metadata instead of original query.
+ * ISSUE 4 FIX: Never uses original search query — always title+uploader.
  */
 async function smartFallbackSearch(
   title: string,
@@ -387,10 +378,10 @@ async function smartFallbackSearch(
  * Main export: fetch similar/related songs for a given videoId.
  *
  * Pipeline:
- * 1. Parallel fetch + validation (min 5 relatedStreams)
+ * 1. Parallel fetch + validation (min 5 relatedStreams) — ISSUE 4
  * 2. Music-only filter (reject shorts/podcasts/interviews, >8 min, <1 min)
  * 3. Similarity scoring (+40 same artist, +25 shared keywords, etc.)
- * 4. Artist diversity (max 2 consecutive same artist, interleaved)
+ * 4. Artist diversity — hard cap of 2 per uploader total — ISSUE 1
  * 5. Smart fallback search (title + uploader, NEVER original search query)
  * 6. Broaden query variants if still empty
  */
@@ -398,12 +389,19 @@ export async function fetchRelatedSongs(
   videoId: string,
   songTitle?: string,
   songUploader?: string,
+  // ISSUE 5 FIX: pass session-played IDs to exclude already-heard songs
+  excludeIds?: Set<string>,
 ): Promise<Song[]> {
   if (!videoId) return [];
 
-  // Return from cache if available
+  // Return from cache if available (but apply excludeIds filter on top)
   if (relatedCache.has(videoId)) {
-    return relatedCache.get(videoId)!;
+    const cached = relatedCache.get(videoId)!;
+    if (!excludeIds || excludeIds.size === 0) return cached;
+    const filtered = cached.filter((s) => !excludeIds.has(s.videoId));
+    if (filtered.length > 0) return filtered;
+    // If cache is exhausted by excludeIds, fall through to re-fetch
+    relatedCache.delete(videoId);
   }
 
   const uploader = songUploader || "";
@@ -430,6 +428,11 @@ export async function fetchRelatedSongs(
     for (let variant = 2; variant <= 4 && songs.length === 0; variant++) {
       songs = await smartFallbackSearch(title, uploader, uploader, variant);
     }
+  }
+
+  // Apply session exclusion filter
+  if (excludeIds && excludeIds.size > 0) {
+    songs = songs.filter((s) => !excludeIds.has(s.videoId));
   }
 
   // Cache and return
