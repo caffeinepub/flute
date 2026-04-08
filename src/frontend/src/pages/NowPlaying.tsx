@@ -3,16 +3,18 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 import {
+  AlertCircle,
   ChevronDown,
   ChevronUp,
   GripVertical,
   Heart,
   ListMusic,
+  ListPlus,
+  Loader2,
   Music2,
   Pause,
   Play,
   PlayCircle,
-  Plus,
   RefreshCw,
   Repeat,
   Repeat1,
@@ -24,12 +26,12 @@ import {
   Trash2,
   Volume2,
   VolumeX,
+  Wrench,
   X,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import type { Song } from "../backend";
 import {
   useCacheLyrics,
   useFetchLyrics,
@@ -39,12 +41,16 @@ import {
 } from "../hooks/useQueries";
 import { useNavigationStore } from "../store/navigationStore";
 import { usePlayerStore } from "../store/playerStore";
+import type { Song } from "../types/song";
 import {
   classifyMood,
   reinforceNegative,
   reinforcePositive,
 } from "../utils/moodPrefs";
-import { fetchRelatedSongs } from "../utils/pipedRecommendations";
+import {
+  fetchRelatedSongs,
+  invalidateRelatedCache,
+} from "../utils/pipedRecommendations";
 
 const SKEL_5 = ["rs0", "rs1", "rs2", "rs3", "rs4"];
 
@@ -73,11 +79,17 @@ export function NowPlaying() {
     setVolume,
     toggleShuffle,
     setRepeat,
-    addToQueue,
     removeFromQueue,
     reorderQueue,
     clearQueue,
     playNext,
+    currentSource,
+    setCurrentSource,
+    playSongFromSimilar,
+    brokenSongs,
+    fixSong,
+    addToQueue,
+    addToSimilar,
   } = usePlayerStore();
   const { goBack } = useNavigationStore();
   const { data: likedSongs = [] } = useLikedSongs();
@@ -91,6 +103,9 @@ export function NowPlaying() {
   const [activeTab, setActiveTab] = useState<"lyrics" | "queue" | "related">(
     "lyrics",
   );
+
+  // Track which songs are currently being fixed (for loading spinner)
+  const [fixingIds, setFixingIds] = useState<Set<string>>(new Set());
 
   const isLiked = currentSong
     ? likedSongs.some((s) => s.videoId === currentSong.videoId)
@@ -114,7 +129,8 @@ export function NowPlaying() {
 
   const currentVideoId = currentSong?.videoId;
 
-  const loadRelated = useCallback((videoId: string) => {
+  const loadRelated = useCallback((videoId: string, invalidate = false) => {
+    if (invalidate) invalidateRelatedCache(videoId);
     setRelatedLoading(true);
     setRelatedError(false);
     const song = usePlayerStore.getState().currentSong;
@@ -125,7 +141,6 @@ export function NowPlaying() {
         if (songs.length === 0) {
           setRelatedError(true);
         }
-        // NOTE: Do NOT add to queue here. Similar Songs and Queue are separate systems.
       })
       .catch(() => {
         setRelatedLoading(false);
@@ -161,8 +176,52 @@ export function NowPlaying() {
 
   const handleNotInterested = (song: Song, index: number) => {
     reinforceNegative(classifyMood(song.title), song.channel);
-    removeFromQueue(index);
-    toast("Removed from queue", { icon: "👎" });
+    setRelatedSongs((prev) => prev.filter((_, i) => i !== index));
+    toast("Removed from suggestions", { icon: "👎" });
+  };
+
+  const handleTabClick = (tab: "lyrics" | "queue" | "related") => {
+    setActiveTab(tab);
+    if (tab === "related") {
+      setCurrentSource("similar");
+    } else if (tab === "queue") {
+      setCurrentSource("queue");
+    }
+  };
+
+  const handleFixSong = async (videoId: string) => {
+    setFixingIds((prev) => new Set(prev).add(videoId));
+    try {
+      await fixSong(videoId);
+      toast.success("Song fixed! Retrying playback.");
+    } catch {
+      toast.error("Couldn't fix this song. Try a different one.");
+    } finally {
+      setFixingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(videoId);
+        return next;
+      });
+    }
+  };
+
+  const handleRelatedSongClick = (song: Song) => {
+    playSongFromSimilar(song, relatedSongs);
+  };
+
+  const handleAddToCurrentTab = (song: Song) => {
+    if (currentSource === "similar") {
+      // Add to similarQueue and also to relatedSongs local display list
+      addToSimilar(song);
+      setRelatedSongs((prev) => {
+        if (prev.find((s) => s.videoId === song.videoId)) return prev;
+        return [...prev, song];
+      });
+      toast.success("Added to Similar Songs");
+    } else {
+      addToQueue(song);
+      toast.success("Added to queue");
+    }
   };
 
   if (!currentSong) {
@@ -181,6 +240,8 @@ export function NowPlaying() {
     );
   }
 
+  const currentSongBroken = brokenSongs.includes(currentSong.videoId);
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -198,14 +259,41 @@ export function NowPlaying() {
 
       {/* Left: Player */}
       <div className="flex flex-col items-center gap-6 lg:w-80 flex-shrink-0">
-        <motion.img
-          key={currentSong.videoId}
-          initial={{ scale: 0.9, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          src={currentSong.thumbnail}
-          alt={currentSong.title}
-          className="w-64 h-64 lg:w-72 lg:h-72 rounded-2xl object-cover shadow-card"
-        />
+        <div className="relative">
+          <motion.img
+            key={currentSong.videoId}
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            src={currentSong.thumbnail}
+            alt={currentSong.title}
+            className="w-64 h-64 lg:w-72 lg:h-72 rounded-2xl object-cover shadow-card"
+          />
+          {/* Broken song banner on album art */}
+          {currentSongBroken && (
+            <div className="absolute inset-x-0 bottom-0 rounded-b-2xl bg-amber-500/90 px-3 py-2 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-900 shrink-0" />
+                <span className="text-xs font-semibold text-amber-900">
+                  Playback issue
+                </span>
+              </div>
+              <button
+                type="button"
+                data-ocid="nowplaying.fix_button"
+                onClick={() => handleFixSong(currentSong.videoId)}
+                disabled={fixingIds.has(currentSong.videoId)}
+                className="flex items-center gap-1 px-3 py-1 rounded-full bg-amber-900 text-amber-100 text-xs font-semibold hover:bg-amber-800 disabled:opacity-60 transition-colors"
+              >
+                {fixingIds.has(currentSong.videoId) ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <Wrench className="w-3 h-3" />
+                )}
+                Fix
+              </button>
+            </div>
+          )}
+        </div>
 
         <div className="text-center w-full">
           <h2 className="text-xl font-bold text-foreground truncate">
@@ -330,13 +418,27 @@ export function NowPlaying() {
 
       {/* Right: Lyrics / Queue / Similar Songs */}
       <div className="flex-1 min-w-0">
+        {/* Source indicator badge */}
+        <div className="flex items-center gap-2 mb-3">
+          <span
+            className={cn(
+              "text-xs font-medium px-2.5 py-1 rounded-full border transition-colors",
+              currentSource === "similar"
+                ? "bg-primary/15 text-primary border-primary/30"
+                : "bg-accent text-muted-foreground border-border",
+            )}
+          >
+            {currentSource === "similar" ? "▶ Similar" : "▶ Queue"}
+          </span>
+        </div>
+
         <div className="flex gap-1 mb-6 bg-accent rounded-xl p-1 w-fit">
           {(["lyrics", "queue", "related"] as const).map((tab) => (
             <button
               key={tab}
               type="button"
               data-ocid={`nowplaying.${tab}.tab`}
-              onClick={() => setActiveTab(tab)}
+              onClick={() => handleTabClick(tab)}
               className={cn(
                 "px-4 py-1.5 rounded-lg text-sm font-medium transition-colors capitalize",
                 activeTab === tab
@@ -431,6 +533,8 @@ export function NowPlaying() {
                   {queue.map((song, i) => {
                     const isCurrent =
                       song.videoId === currentSong.videoId && i === queueIndex;
+                    const isBroken = brokenSongs.includes(song.videoId);
+                    const isFixing = fixingIds.has(song.videoId);
                     return (
                       <div
                         key={`${song.videoId}-${i}`}
@@ -440,6 +544,7 @@ export function NowPlaying() {
                           isCurrent
                             ? "bg-primary/10 border-l-2 border-primary"
                             : "hover:bg-accent",
+                          isBroken && "border border-amber-500/30",
                         )}
                       >
                         {/* Modern drag handle + reorder */}
@@ -483,6 +588,7 @@ export function NowPlaying() {
                               className={cn(
                                 "text-sm font-medium truncate",
                                 isCurrent ? "text-primary" : "text-foreground",
+                                isBroken && "text-amber-400",
                               )}
                             >
                               {song.title}
@@ -493,8 +599,25 @@ export function NowPlaying() {
                           </div>
                         </button>
 
-                        {/* Play Now + Feedback + remove */}
+                        {/* Fix button for broken songs + Play Now + Feedback + remove */}
                         <div className="flex items-center gap-1.5 flex-shrink-0">
+                          {isBroken && (
+                            <button
+                              type="button"
+                              data-ocid={`queue.fix_button.${i + 1}`}
+                              title="Fix broken song"
+                              disabled={isFixing}
+                              onClick={() => handleFixSong(song.videoId)}
+                              className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-400 hover:bg-amber-500/30 text-xs font-semibold border border-amber-500/30 disabled:opacity-60 transition-colors"
+                            >
+                              {isFixing ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <Wrench className="w-3 h-3" />
+                              )}
+                              Fix
+                            </button>
+                          )}
                           <button
                             type="button"
                             data-ocid={`queue.primary_button.${i + 1}`}
@@ -572,7 +695,7 @@ export function NowPlaying() {
                     data-ocid="related.secondary_button"
                     onClick={() => {
                       if (!currentVideoId) return;
-                      loadRelated(currentVideoId);
+                      loadRelated(currentVideoId, true);
                     }}
                     className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-accent hover:bg-primary/20 text-sm font-medium text-muted-foreground hover:text-primary transition-colors"
                   >
@@ -584,56 +707,108 @@ export function NowPlaying() {
             ) : (
               <ScrollArea className="h-[50vh]">
                 <div className="space-y-1">
-                  {relatedSongs.map((song, i) => (
-                    <div
-                      key={song.videoId}
-                      data-ocid={`related.item.${i + 1}`}
-                      className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-accent transition-colors group"
-                    >
-                      <button
-                        type="button"
-                        className="relative flex-shrink-0"
-                        onClick={() =>
-                          usePlayerStore.getState().playSong(song, relatedSongs)
-                        }
+                  {relatedSongs.map((song, i) => {
+                    const isBroken = brokenSongs.includes(song.videoId);
+                    const isFixing = fixingIds.has(song.videoId);
+                    return (
+                      <div
+                        key={song.videoId}
+                        data-ocid={`related.item.${i + 1}`}
+                        className={cn(
+                          "flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-accent transition-colors group",
+                          isBroken && "border border-amber-500/20",
+                        )}
                       >
-                        <img
-                          src={song.thumbnail}
-                          alt={song.title}
-                          className="w-12 h-12 rounded object-cover"
-                        />
-                        <div className="absolute inset-0 bg-black/50 rounded opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                          <Play className="w-4 h-4 text-white fill-white" />
+                        {/* Thumbnail — click to play from similar source */}
+                        <button
+                          type="button"
+                          className="relative flex-shrink-0"
+                          onClick={() => handleRelatedSongClick(song)}
+                        >
+                          <img
+                            src={song.thumbnail}
+                            alt={song.title}
+                            className="w-12 h-12 rounded object-cover"
+                          />
+                          <div className="absolute inset-0 bg-black/50 rounded opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            <Play className="w-4 h-4 text-white fill-white" />
+                          </div>
+                        </button>
+
+                        {/* Title + channel — click to play from similar source */}
+                        <button
+                          type="button"
+                          className="flex-1 min-w-0 text-left"
+                          onClick={() => handleRelatedSongClick(song)}
+                        >
+                          <p
+                            className={cn(
+                              "text-sm font-medium truncate",
+                              isBroken ? "text-amber-400" : "text-foreground",
+                            )}
+                          >
+                            {song.title}
+                          </p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {song.channel}
+                          </p>
+                        </button>
+
+                        {/* Action buttons */}
+                        <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                          {/* Fix button for broken similar songs */}
+                          {isBroken && (
+                            <button
+                              type="button"
+                              data-ocid={`related.fix_button.${i + 1}`}
+                              title="Fix broken song"
+                              disabled={isFixing}
+                              onClick={() => handleFixSong(song.videoId)}
+                              className="flex items-center gap-1 px-2 py-1 rounded-full bg-amber-500/15 text-amber-400 hover:bg-amber-500/30 text-xs font-semibold border border-amber-500/30 disabled:opacity-60 transition-colors"
+                            >
+                              {isFixing ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <Wrench className="w-3 h-3" />
+                              )}
+                            </button>
+                          )}
+                          {/* Add to current tab */}
+                          <button
+                            type="button"
+                            data-ocid={`related.add_button.${i + 1}`}
+                            title={
+                              currentSource === "similar"
+                                ? "Add to Similar Songs"
+                                : "Add to Queue"
+                            }
+                            onClick={() => handleAddToCurrentTab(song)}
+                            className="w-7 h-7 rounded-full bg-primary/10 text-primary hover:bg-primary/25 flex items-center justify-center transition-colors"
+                          >
+                            <ListPlus className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            data-ocid={`related.toggle.${i + 1}`}
+                            title="More like this"
+                            onClick={() => handleListened(song)}
+                            className="w-7 h-7 rounded-full bg-green-500/10 text-green-400 hover:bg-green-500/25 hover:text-green-300 flex items-center justify-center transition-colors"
+                          >
+                            <ThumbsUp className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            data-ocid={`related.delete_button.${i + 1}`}
+                            title="Not interested"
+                            onClick={() => handleNotInterested(song, i)}
+                            className="w-7 h-7 rounded-full bg-red-500/10 text-red-400 hover:bg-red-500/25 hover:text-red-300 flex items-center justify-center transition-colors"
+                          >
+                            <ThumbsDown className="w-3.5 h-3.5" />
+                          </button>
                         </div>
-                      </button>
-                      <button
-                        type="button"
-                        className="flex-1 min-w-0 text-left"
-                        onClick={() =>
-                          usePlayerStore.getState().playSong(song, relatedSongs)
-                        }
-                      >
-                        <p className="text-sm font-medium text-foreground truncate">
-                          {song.title}
-                        </p>
-                        <p className="text-xs text-muted-foreground truncate">
-                          {song.channel}
-                        </p>
-                      </button>
-                      <button
-                        type="button"
-                        data-ocid={`related.secondary_button.${i + 1}`}
-                        title="Add to queue"
-                        onClick={() => {
-                          addToQueue(song);
-                          toast.success("Added to queue");
-                        }}
-                        className="flex-shrink-0 w-7 h-7 rounded-full bg-accent hover:bg-primary/20 text-muted-foreground hover:text-primary flex items-center justify-center transition-colors"
-                      >
-                        <Plus className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))}
+                      </div>
+                    );
+                  })}
                 </div>
               </ScrollArea>
             )}

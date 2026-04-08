@@ -1,4 +1,4 @@
-import type { Song } from "../backend";
+import type { Song } from "../types/song";
 import { userGet, userSet } from "./userStorage";
 
 export function getLikedSongs(): Song[] {

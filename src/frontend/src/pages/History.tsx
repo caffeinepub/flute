@@ -1,8 +1,8 @@
 import { Clock } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
-import type { Song } from "../backend";
 import { SongCard } from "../components/SongCard/SongCard";
+import type { Song } from "../types/song";
 import { getLocalHistory } from "../utils/localHistory";
 
 interface GroupedHistory {

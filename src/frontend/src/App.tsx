@@ -2,7 +2,6 @@ import { Toaster } from "@/components/ui/sonner";
 import { Play, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
-import type { Song } from "./backend";
 import { BottomNav } from "./components/BottomNav";
 import { PlayerBar } from "./components/Player/PlayerBar";
 import { YouTubePlayer } from "./components/Player/YouTubePlayer";
@@ -19,6 +18,7 @@ import { Search } from "./pages/Search";
 import { Settings } from "./pages/Settings";
 import { useNavigationStore } from "./store/navigationStore";
 import { loadLastSong, usePlayerStore } from "./store/playerStore";
+import type { Song } from "./types/song";
 
 // Apply saved theme on startup
 loadSavedTheme();

@@ -4,10 +4,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { AlertCircle, RefreshCw, Search as SearchIcon } from "lucide-react";
 import { motion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
-import type { Song } from "../backend";
 import { SongCard } from "../components/SongCard/SongCard";
 import { searchVideos } from "../lib/invidious";
 import { useNavigationStore } from "../store/navigationStore";
+import type { Song } from "../types/song";
 import { userGet, userSet } from "../utils/userStorage";
 
 const GENRE_SHORTCUTS = [

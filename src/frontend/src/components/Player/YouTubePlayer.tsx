@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useCacheSong, useRecordListening } from "../../hooks/useQueries";
-import { pipedFetch, searchVideos } from "../../lib/invidious";
+import { pipedFetch } from "../../lib/invidious";
 import { registerSeekCallback, usePlayerStore } from "../../store/playerStore";
 import { addToLocalHistory } from "../../utils/localHistory";
+import { fetchRelatedSongs } from "../../utils/pipedRecommendations";
 
 interface PipedAudioStream {
   url: string;
@@ -15,18 +16,25 @@ interface PipedStreamsData {
   duration?: number;
 }
 
+// How long to wait before re-triggering sticky notification (ms)
+const STICKY_NOTIFICATION_DELAY = 4000;
+
 export function YouTubePlayer() {
   const audioRef = useRef<HTMLAudioElement>(null);
   const loadingVideoIdRef = useRef<string | null>(null);
+  const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stickyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isBuffering, setIsBuffering] = useState(false);
 
   const currentSong = usePlayerStore((s) => s.currentSong);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const volume = usePlayerStore((s) => s.volume);
+  const stickyNotification = usePlayerStore((s) => s.stickyNotification);
   const setProgress = usePlayerStore((s) => s.setProgress);
   const setDuration = usePlayerStore((s) => s.setDuration);
   const setIsPlaying = usePlayerStore((s) => s.setIsPlaying);
   const next = usePlayerStore((s) => s.next);
+  const markBroken = usePlayerStore((s) => s.markBroken);
 
   const recordListening = useRecordListening();
   const cacheSong = useCacheSong();
@@ -43,6 +51,10 @@ export function YouTubePlayer() {
   recordRef.current = recordListening.mutate;
   const currentSongRef = useRef(currentSong);
   currentSongRef.current = currentSong;
+  const markBrokenRef = useRef(markBroken);
+  markBrokenRef.current = markBroken;
+  const stickyNotificationRef = useRef(stickyNotification);
+  stickyNotificationRef.current = stickyNotification;
 
   // Register seek callback
   useEffect(() => {
@@ -53,12 +65,28 @@ export function YouTubePlayer() {
     });
   }, []);
 
+  // FIX 8 — Helper: mark broken and clear stall timer
+  const handleBroken = useCallback((videoId: string) => {
+    if (stallTimerRef.current) {
+      clearTimeout(stallTimerRef.current);
+      stallTimerRef.current = null;
+    }
+    markBrokenRef.current(videoId);
+  }, []);
+
   // Wire up audio element events once on mount
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
-    const onTimeUpdate = () => setProgress(audio.currentTime);
+    const onTimeUpdate = () => {
+      setProgress(audio.currentTime);
+      // Reset stall timer on progress
+      if (stallTimerRef.current) {
+        clearTimeout(stallTimerRef.current);
+        stallTimerRef.current = null;
+      }
+    };
     const onLoadedMetadata = () => {
       if (
         audio.duration &&
@@ -66,6 +94,10 @@ export function YouTubePlayer() {
         audio.duration > 0
       ) {
         setDurationRef.current(audio.duration);
+      } else {
+        // FIX 8 — duration is 0 after metadata load → broken
+        const song = currentSongRef.current;
+        if (song) handleBroken(song.videoId);
       }
     };
     const onDurationChange = () => {
@@ -89,14 +121,23 @@ export function YouTubePlayer() {
         if (isAtEnd) {
           const song = currentSongRef.current;
           if (song) {
-            searchVideos(`${song.title} ${song.channel}`)
+            fetchRelatedSongs(song.videoId, song.title, song.channel)
               .then((results) => {
                 const nextSong = results.find(
                   (r) => r.videoId !== song.videoId,
                 );
-                if (nextSong) usePlayerStore.getState().playSong(nextSong);
+                if (nextSong) {
+                  usePlayerStore.getState().appendSimilarToQueue(results);
+                  usePlayerStore
+                    .getState()
+                    .playSong(nextSong, [...usePlayerStore.getState().queue]);
+                } else {
+                  setIsPlayingRef.current(false);
+                }
               })
-              .catch(() => {});
+              .catch(() => {
+                setIsPlayingRef.current(false);
+              });
           } else {
             setIsPlayingRef.current(false);
           }
@@ -105,21 +146,47 @@ export function YouTubePlayer() {
         }
       }
     };
-    const onWaiting = () => setIsBuffering(true);
-    const onCanPlay = () => setIsBuffering(false);
+    const onWaiting = () => {
+      setIsBuffering(true);
+      // FIX 8 — if stalled for 3+ seconds with no progress, mark broken
+      const song = currentSongRef.current;
+      if (song) {
+        stallTimerRef.current = setTimeout(() => {
+          const currentAudio = audioRef.current;
+          if (
+            currentAudio &&
+            currentAudio.readyState < 3 &&
+            !currentAudio.paused
+          ) {
+            handleBroken(song.videoId);
+          }
+        }, 3000);
+      }
+    };
+    const onCanPlay = () => {
+      setIsBuffering(false);
+      if (stallTimerRef.current) {
+        clearTimeout(stallTimerRef.current);
+        stallTimerRef.current = null;
+      }
+    };
     const onError = (e: Event) => {
       const err = (e.target as HTMLAudioElement).error;
       console.warn("Audio error:", err?.code, err?.message);
       setIsBuffering(false);
       const song = currentSongRef.current;
       if (song && loadingVideoIdRef.current === song.videoId) {
+        // FIX 8 — mark as broken on audio error
+        handleBroken(song.videoId);
         loadingVideoIdRef.current = null;
         setTimeout(() => {
           usePlayerStore.setState((s) => ({ ...s }));
         }, 500);
       }
     };
-    const onStalled = () => setIsBuffering(true);
+    const onStalled = () => {
+      setIsBuffering(true);
+    };
 
     audio.addEventListener("timeupdate", onTimeUpdate);
     audio.addEventListener("loadedmetadata", onLoadedMetadata);
@@ -145,11 +212,12 @@ export function YouTubePlayer() {
       audio.removeEventListener("canplay", onCanPlay);
       audio.removeEventListener("canplaythrough", onCanPlay);
       audio.removeEventListener("error", onError);
+      if (stallTimerRef.current) clearTimeout(stallTimerRef.current);
     };
-  }, [setProgress]);
+  }, [setProgress, handleBroken]);
 
-  // Load new stream when song changes -- triggered by videoId change
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally keyed on videoId only; currentSong accessed via ref to avoid stale closures
+  // Load new stream when song changes
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally keyed on videoId only
   useEffect(() => {
     const song = currentSongRef.current;
     const videoId = song?.videoId ?? null;
@@ -171,6 +239,15 @@ export function YouTubePlayer() {
     cacheSongRef.current(song);
     recordRef.current(song.videoId);
     addToLocalHistory(song);
+
+    // Auto-fill queue with similar songs in the background
+    fetchRelatedSongs(song.videoId, song.title, song.channel)
+      .then((similar) => {
+        if (similar.length > 0) {
+          usePlayerStore.getState().appendSimilarToQueue(similar);
+        }
+      })
+      .catch(() => {});
 
     const fetchingId = videoId;
 
@@ -212,6 +289,8 @@ export function YouTubePlayer() {
         console.error("Stream fetch failed:", err);
         setIsBuffering(false);
         setIsPlayingRef.current(false);
+        // Mark broken on stream fetch failure
+        handleBroken(fetchingId);
       });
   }, [currentSong]);
 
@@ -293,6 +372,71 @@ export function YouTubePlayer() {
     };
     audio.addEventListener("timeupdate", updatePosition);
     return () => audio.removeEventListener("timeupdate", updatePosition);
+  }, []);
+
+  // FIX 10 — Sticky notification: re-trigger Media Session metadata on visibility change
+  useEffect(() => {
+    if (!("mediaSession" in navigator)) return;
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) return; // page hidden, no action
+
+      // Page became visible — if sticky and playing, re-assert metadata after a short delay
+      if (
+        stickyNotificationRef.current &&
+        usePlayerStore.getState().isPlaying
+      ) {
+        if (stickyTimerRef.current) clearTimeout(stickyTimerRef.current);
+        stickyTimerRef.current = setTimeout(() => {
+          const song = currentSongRef.current;
+          if (!song || !("mediaSession" in navigator)) return;
+          // Re-set metadata to re-show the notification
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: song.title,
+            artist: song.channel,
+            artwork: [
+              { src: song.thumbnail, sizes: "512x512", type: "image/jpeg" },
+            ],
+          });
+          try {
+            const audio = audioRef.current;
+            if (audio?.duration && !Number.isNaN(audio.duration)) {
+              navigator.mediaSession.setPositionState({
+                duration: audio.duration,
+                playbackRate: audio.playbackRate,
+                position: audio.currentTime,
+              });
+            }
+          } catch {}
+        }, STICKY_NOTIFICATION_DELAY);
+      }
+    };
+
+    // Also trigger when notification might be dismissed: poll every ~5s while playing
+    const stickyPoll = setInterval(() => {
+      if (!stickyNotificationRef.current) return;
+      if (!usePlayerStore.getState().isPlaying) return;
+      const song = currentSongRef.current;
+      if (!song) return;
+      // Re-assert metadata to keep notification alive
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: song.title,
+          artist: song.channel,
+          artwork: [
+            { src: song.thumbnail, sizes: "512x512", type: "image/jpeg" },
+          ],
+        });
+      } catch {}
+    }, 5000);
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      clearInterval(stickyPoll);
+      if (stickyTimerRef.current) clearTimeout(stickyTimerRef.current);
+    };
   }, []);
 
   return (

@@ -47,7 +47,7 @@ export interface http_request_result {
   'headers' : Array<http_header>,
 }
 export interface _SERVICE {
-  '_initializeAccessControlWithSecret' : ActorMethod<[string], undefined>,
+  '_initializeAccessControl' : ActorMethod<[], undefined>,
   'addSongToPlaylist' : ActorMethod<[PlaylistId, SongId], undefined>,
   'assignCallerUserRole' : ActorMethod<[Principal, UserRole], undefined>,
   'cacheLyrics' : ActorMethod<[SongId, string], undefined>,

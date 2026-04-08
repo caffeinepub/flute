@@ -54,7 +54,7 @@ export const TransformationOutput = IDL.Record({
 });
 
 export const idlService = IDL.Service({
-  '_initializeAccessControlWithSecret' : IDL.Func([IDL.Text], [], []),
+  '_initializeAccessControl' : IDL.Func([], [], []),
   'addSongToPlaylist' : IDL.Func([PlaylistId, SongId], [], []),
   'assignCallerUserRole' : IDL.Func([IDL.Principal, UserRole], [], []),
   'cacheLyrics' : IDL.Func([SongId, IDL.Text], [], []),
@@ -133,7 +133,7 @@ export const idlFactory = ({ IDL }) => {
   });
   
   return IDL.Service({
-    '_initializeAccessControlWithSecret' : IDL.Func([IDL.Text], [], []),
+    '_initializeAccessControl' : IDL.Func([], [], []),
     'addSongToPlaylist' : IDL.Func([PlaylistId, SongId], [], []),
     'assignCallerUserRole' : IDL.Func([IDL.Principal, UserRole], [], []),
     'cacheLyrics' : IDL.Func([SongId, IDL.Text], [], []),

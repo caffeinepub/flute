@@ -2,9 +2,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  Bell,
   Check,
   ClipboardCopy,
   Clock,
+  Globe,
   LogOut,
   Palette,
   RefreshCw,
@@ -45,8 +47,35 @@ function formatCountdown(ms: number): string {
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
+// Pill toggle component used for binary settings
+function ToggleSwitch({
+  enabled,
+  onToggle,
+  id,
+}: { enabled: boolean; onToggle: () => void; id: string }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={enabled}
+      id={id}
+      onClick={onToggle}
+      className={`relative inline-flex h-6 w-11 items-center rounded-full border-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+        enabled ? "bg-primary border-primary" : "bg-accent border-border"
+      }`}
+    >
+      <span
+        className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
+          enabled ? "translate-x-5" : "translate-x-0.5"
+        }`}
+      />
+    </button>
+  );
+}
+
 export function Settings() {
   const { user, logout } = useLocalAuth();
+  const { stickyNotification, setStickyNotification } = usePlayerStore();
 
   const [editName, setEditName] = useState("");
   const [nameSaved, setNameSaved] = useState(false);
@@ -64,6 +93,22 @@ export function Settings() {
   const [installPrompt, setInstallPrompt] = useState<Event | null>(null);
   const [isInstalled, setIsInstalled] = useState(false);
 
+  // External API toggle state
+  const [useExternalApi, setUseExternalApi] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("flute_use_external_api") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [externalApiUrl, setExternalApiUrl] = useState<string>(() => {
+    try {
+      return localStorage.getItem("flute_external_api_url") || "";
+    } catch {
+      return "";
+    }
+  });
+
   useEffect(() => {
     setEditName(user?.username || "");
     setActiveTheme(loadSavedTheme());
@@ -77,7 +122,6 @@ export function Settings() {
     };
     window.addEventListener("beforeinstallprompt", handler);
 
-    // Check if already installed
     if (window.matchMedia("(display-mode: standalone)").matches) {
       setIsInstalled(true);
     }
@@ -186,6 +230,22 @@ export function Settings() {
         .then(() => toast.success("Link copied to clipboard!"))
         .catch(() => toast.error("Failed to copy"));
     }
+  };
+
+  const handleToggleExternalApi = () => {
+    const next = !useExternalApi;
+    setUseExternalApi(next);
+    try {
+      localStorage.setItem("flute_use_external_api", String(next));
+    } catch {}
+    toast.success(next ? "External API enabled" : "Using Piped (default)");
+  };
+
+  const handleExternalApiUrlChange = (val: string) => {
+    setExternalApiUrl(val);
+    try {
+      localStorage.setItem("flute_external_api_url", val);
+    } catch {}
   };
 
   // Format token as pairs: AB CD EF
@@ -353,6 +413,111 @@ export function Settings() {
               </button>
             )}
           </div>
+        </motion.section>
+
+        {/* Music Source — External API toggle */}
+        <motion.section
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.09 }}
+          className="bg-card rounded-xl p-5 shadow-card"
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <Globe className="w-5 h-5 text-primary" />
+            <h2 className="text-lg font-semibold text-foreground">
+              Music Source
+            </h2>
+          </div>
+          <p className="text-sm text-muted-foreground mb-4">
+            Switch between Piped (default) and your own recommendations API.
+          </p>
+
+          {/* Toggle row */}
+          <div className="flex items-center justify-between py-2">
+            <div>
+              <Label
+                htmlFor="external-api-toggle"
+                className="text-sm font-medium text-foreground cursor-pointer"
+              >
+                Use External API
+              </Label>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {useExternalApi
+                  ? "Fetching recommendations from your API"
+                  : "Using Piped for music recommendations"}
+              </p>
+            </div>
+            <ToggleSwitch
+              id="external-api-toggle"
+              enabled={useExternalApi}
+              onToggle={handleToggleExternalApi}
+            />
+          </div>
+
+          {/* API URL input — shown only when enabled */}
+          {useExternalApi && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              className="mt-3 space-y-2"
+            >
+              <Label className="text-muted-foreground text-xs block">
+                API Endpoint URL
+              </Label>
+              <Input
+                data-ocid="settings.api_url_input"
+                value={externalApiUrl}
+                onChange={(e) => handleExternalApiUrlChange(e.target.value)}
+                placeholder="https://your-api.com/recommendations"
+                className="bg-accent border-border text-foreground text-sm"
+              />
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Override Piped with your own music API. Response must be a JSON
+                array of{" "}
+                <span className="font-mono text-foreground/70 text-xs">
+                  {"{title, uploader, duration, streamUrl, thumbnail, videoId}"}
+                </span>
+              </p>
+            </motion.div>
+          )}
+        </motion.section>
+
+        {/* Persistent Notification */}
+        <motion.section
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.095 }}
+          className="bg-card rounded-xl p-5 shadow-card"
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <Bell className="w-5 h-5 text-primary" />
+            <h2 className="text-lg font-semibold text-foreground">
+              Notifications
+            </h2>
+          </div>
+
+          <div className="flex items-center justify-between py-2">
+            <div>
+              <Label
+                htmlFor="sticky-notif-toggle"
+                className="text-sm font-medium text-foreground cursor-pointer"
+              >
+                Persistent Notification
+              </Label>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Notification reappears after being dismissed
+              </p>
+            </div>
+            <ToggleSwitch
+              id="sticky-notif-toggle"
+              enabled={stickyNotification}
+              onToggle={() => setStickyNotification(!stickyNotification)}
+            />
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            Keep playback notification visible even after dismissal — like real
+            music apps.
+          </p>
         </motion.section>
 
         {/* Sync Token */}

@@ -1,0 +1,80 @@
+type http_request_result = 
+ record {
+   body: blob;
+   headers: vec http_header;
+   status: nat;
+ };
+type http_header = 
+ record {
+   name: text;
+   value: text;
+ };
+type UserRole = 
+ variant {
+   admin;
+   guest;
+   user;
+ };
+type UserProfile = record {name: text;};
+type TransformationOutput = 
+ record {
+   body: blob;
+   headers: vec http_header;
+   status: nat;
+ };
+type TransformationInput = 
+ record {
+   context: blob;
+   response: http_request_result;
+ };
+type Time = int;
+type SongId = text;
+type Song = 
+ record {
+   channel: text;
+   duration: text;
+   lyrics: opt text;
+   thumbnail: text;
+   title: text;
+   videoId: SongId;
+ };
+type PlaylistView = 
+ record {
+   id: PlaylistId;
+   name: text;
+   songs: vec SongId;
+ };
+type PlaylistId = nat;
+type HistoryEntry = 
+ record {
+   songId: SongId;
+   timestamp: Time;
+ };
+service : {
+  _initializeAccessControl: () -> ();
+  addSongToPlaylist: (playlistId: PlaylistId, songId: SongId) -> ();
+  assignCallerUserRole: (user: principal, role: UserRole) -> ();
+  cacheLyrics: (songId: SongId, lyrics: text) -> ();
+  cacheSong: (song: Song) -> ();
+  createPlaylist: (name: text) -> (PlaylistId);
+  deletePlaylist: (playlistId: PlaylistId) -> ();
+  fetchLyrics: (artist: text, title: text) -> (text);
+  getAllPlaylists: () -> (vec PlaylistView) query;
+  getAllSongs: () -> (vec Song) query;
+  getCallerUserProfile: () -> (opt UserProfile) query;
+  getCallerUserRole: () -> (UserRole) query;
+  getLikedSongs: () -> (vec Song) query;
+  getListeningHistory: () -> (vec HistoryEntry) query;
+  getPlaylist: (playlistId: PlaylistId) -> (opt PlaylistView) query;
+  getSong: (songId: SongId) -> (opt Song) query;
+  getUserProfile: (user: principal) -> (opt UserProfile) query;
+  isCallerAdmin: () -> (bool) query;
+  likeSong: (songId: SongId) -> ();
+  recordListening: (songId: SongId) -> ();
+  removeSongFromPlaylist: (playlistId: PlaylistId, songId: SongId) -> ();
+  renamePlaylist: (playlistId: PlaylistId, newName: text) -> ();
+  reorderPlaylist: (playlistId: PlaylistId, newOrder: vec SongId) -> ();
+  saveCallerUserProfile: (profile: UserProfile) -> ();
+  transform: (input: TransformationInput) -> (TransformationOutput) query;
+  unlikeSong: (songId: SongId) -> ();
+}

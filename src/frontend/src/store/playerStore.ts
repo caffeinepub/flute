@@ -1,8 +1,10 @@
 import { create } from "zustand";
-import type { Song } from "../backend";
+import { pipedFetch } from "../lib/invidious";
+import type { Song } from "../types/song";
 import { userGet, userSet } from "../utils/userStorage";
 
 export type RepeatMode = "none" | "one" | "all";
+export type PlaybackSource = "queue" | "similar";
 
 // Module-level seek callback so we don't store DOM objects in Zustand
 let _seekCallback: ((seconds: number) => void) | null = null;
@@ -24,6 +26,11 @@ export function loadLastSong(): {
   );
 }
 
+interface PipedStreamsData {
+  audioStreams: Array<{ url: string; bitrate: number; mimeType: string }>;
+  duration?: number;
+}
+
 interface PlayerState {
   currentSong: Song | null;
   queue: Song[];
@@ -35,12 +42,31 @@ interface PlayerState {
   duration: number;
   volume: number;
 
+  // Playback source: which tab controls next/prev navigation
+  currentSource: PlaybackSource;
+  setCurrentSource: (source: PlaybackSource) => void;
+
+  // Similar songs queue for source-aware navigation
+  similarQueue: Song[];
+  similarQueueIndex: number;
+
+  // Broken song tracking (array for Zustand serialization)
+  brokenSongs: string[];
+  markBroken: (videoId: string) => void;
+  fixSong: (videoId: string) => Promise<void>;
+
+  // Sticky notification
+  stickyNotification: boolean;
+  setStickyNotification: (val: boolean) => void;
+
   playSong: (song: Song, queue?: Song[]) => void;
+  playSongFromSimilar: (song: Song, similarList: Song[]) => void;
   togglePlay: () => void;
   setIsPlaying: (playing: boolean) => void;
   next: () => void;
   prev: () => void;
   addToQueue: (song: Song) => void;
+  addToSimilar: (song: Song) => void;
   removeFromQueue: (index: number) => void;
   reorderQueue: (fromIndex: number, toIndex: number) => void;
   setProgress: (progress: number) => void;
@@ -51,6 +77,7 @@ interface PlayerState {
   setRepeat: (mode: RepeatMode) => void;
   clearQueue: () => void;
   playNext: (song: Song) => void;
+  appendSimilarToQueue: (songs: Song[]) => void;
 }
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
@@ -64,6 +91,74 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   duration: 0,
   volume: 0.8,
 
+  currentSource: "queue",
+  setCurrentSource: (source) => set({ currentSource: source }),
+
+  similarQueue: [],
+  similarQueueIndex: 0,
+
+  brokenSongs: [] as string[],
+  markBroken: (videoId: string) => {
+    set((s) => {
+      if (s.brokenSongs.includes(videoId)) return s;
+      return { brokenSongs: [...s.brokenSongs, videoId] };
+    });
+  },
+  fixSong: async (videoId: string) => {
+    try {
+      // Re-fetch from Piped with a fresh request (cache bypassed)
+      const data = (await pipedFetch(
+        `/streams/${videoId}`,
+      )) as PipedStreamsData;
+      const streams = data?.audioStreams ?? [];
+      if (streams.length === 0) throw new Error("No streams");
+
+      const sorted = [...streams].sort(
+        (a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0),
+      );
+      const mp4 = sorted.find((s) => s.mimeType?.includes("audio/mp4"));
+      const webm = sorted.find((s) => s.mimeType?.includes("audio/webm"));
+      const best = mp4 ?? webm ?? sorted[0];
+
+      if (!best?.url) throw new Error("No valid stream");
+
+      // Remove from broken array
+      set((s) => ({
+        brokenSongs: s.brokenSongs.filter((id) => id !== videoId),
+      }));
+
+      // If it's the currently playing song, trigger re-load by toggling the song
+      const { currentSong, queue, queueIndex } = get();
+      if (currentSong?.videoId === videoId) {
+        // Re-trigger by re-setting the current song (YouTubePlayer watches currentSong)
+        set({
+          currentSong: { ...currentSong },
+          isPlaying: true,
+          progress: 0,
+          duration: 0,
+        });
+        userSet(LAST_SONG_KEY, { song: currentSong, queue, queueIndex });
+      }
+    } catch {
+      // silent — song remains broken
+    }
+  },
+
+  stickyNotification: (() => {
+    try {
+      const stored = localStorage.getItem("flute_sticky_notification");
+      return stored === null ? true : stored === "true";
+    } catch {
+      return true;
+    }
+  })(),
+  setStickyNotification: (val: boolean) => {
+    try {
+      localStorage.setItem("flute_sticky_notification", String(val));
+    } catch {}
+    set({ stickyNotification: val });
+  },
+
   playSong: (song: Song, queue?: Song[]) => {
     const newQueue = queue || [song];
     const idx = newQueue.findIndex((s) => s.videoId === song.videoId);
@@ -75,9 +170,31 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       isPlaying: true,
       progress: 0,
       duration: 0,
+      currentSource: "queue",
     });
-    // Persist last song for resume
     userSet(LAST_SONG_KEY, { song, queue: newQueue, queueIndex });
+  },
+
+  playSongFromSimilar: (song: Song, similarList: Song[]) => {
+    const idx = similarList.findIndex((s) => s.videoId === song.videoId);
+    const similarQueueIndex = idx >= 0 ? idx : 0;
+    // Replace queue with [currentSong, ...similarList] for continuous recommendation playback
+    const newQueue = [
+      song,
+      ...similarList.filter((s) => s.videoId !== song.videoId),
+    ];
+    set({
+      currentSong: song,
+      queue: newQueue,
+      queueIndex: 0,
+      similarQueue: similarList,
+      similarQueueIndex,
+      isPlaying: true,
+      progress: 0,
+      duration: 0,
+      currentSource: "similar",
+    });
+    userSet(LAST_SONG_KEY, { song, queue: newQueue, queueIndex: 0 });
   },
 
   togglePlay: () => {
@@ -89,7 +206,40 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   next: () => {
-    const { queue, queueIndex, shuffle, repeat } = get();
+    const {
+      currentSource,
+      similarQueue,
+      similarQueueIndex,
+      queue,
+      queueIndex,
+      shuffle,
+      repeat,
+    } = get();
+
+    if (currentSource === "similar" && similarQueue.length > 0) {
+      let nextIdx: number;
+      if (shuffle) {
+        nextIdx = Math.floor(Math.random() * similarQueue.length);
+      } else if (similarQueueIndex < similarQueue.length - 1) {
+        nextIdx = similarQueueIndex + 1;
+      } else if (repeat === "all") {
+        nextIdx = 0;
+      } else {
+        set({ isPlaying: false });
+        return;
+      }
+      const nextSong = similarQueue[nextIdx];
+      set({
+        currentSong: nextSong,
+        similarQueueIndex: nextIdx,
+        isPlaying: true,
+        progress: 0,
+        duration: 0,
+      });
+      return;
+    }
+
+    // Default: navigate in queue
     if (queue.length === 0) return;
     let nextIdx: number;
     if (shuffle) {
@@ -112,7 +262,32 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   prev: () => {
-    const { queue, queueIndex, progress } = get();
+    const {
+      currentSource,
+      similarQueue,
+      similarQueueIndex,
+      queue,
+      queueIndex,
+      progress,
+    } = get();
+
+    if (currentSource === "similar" && similarQueue.length > 0) {
+      if (progress > 3) {
+        if (_seekCallback) _seekCallback(0);
+        set({ progress: 0 });
+        return;
+      }
+      const prevIdx = similarQueueIndex > 0 ? similarQueueIndex - 1 : 0;
+      set({
+        currentSong: similarQueue[prevIdx],
+        similarQueueIndex: prevIdx,
+        isPlaying: true,
+        progress: 0,
+        duration: 0,
+      });
+      return;
+    }
+
     if (queue.length === 0) return;
     if (progress > 3) {
       if (_seekCallback) _seekCallback(0);
@@ -135,6 +310,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       const newQueue = [...s.queue];
       newQueue.splice(insertAt, 0, song);
       return { queue: newQueue };
+    });
+  },
+
+  addToSimilar: (song: Song) => {
+    set((s) => {
+      const insertAt = s.similarQueueIndex + 1;
+      const newSimilar = [...s.similarQueue];
+      newSimilar.splice(insertAt, 0, song);
+      return { similarQueue: newSimilar };
     });
   },
 
@@ -195,7 +379,17 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         isPlaying: true,
         progress: 0,
         duration: 0,
+        currentSource: "queue",
       };
+    });
+  },
+
+  appendSimilarToQueue: (songs: Song[]) => {
+    set((s) => {
+      const existingIds = new Set(s.queue.map((q) => q.videoId));
+      const newSongs = songs.filter((song) => !existingIds.has(song.videoId));
+      if (newSongs.length === 0) return s;
+      return { queue: [...s.queue, ...newSongs] };
     });
   },
 }));

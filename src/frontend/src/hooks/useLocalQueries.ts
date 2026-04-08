@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import type { Song } from "../backend";
+import type { Song } from "../types/song";
 import * as LL from "../utils/localLikedSongs";
 import * as LP from "../utils/localPlaylists";
 

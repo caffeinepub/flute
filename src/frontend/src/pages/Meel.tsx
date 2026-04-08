@@ -9,7 +9,6 @@ import {
 import { cn } from "@/lib/utils";
 import { Heart, Loader2, Music2, Plus, SkipForward } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Song } from "../backend";
 import {
   useAddSongToPlaylist,
   useAllPlaylists,
@@ -19,6 +18,7 @@ import {
 } from "../hooks/useQueries";
 import { fetchTrending } from "../lib/invidious";
 import { usePlayerStore } from "../store/playerStore";
+import type { Song } from "../types/song";
 
 interface MeelCardProps {
   song: Song;

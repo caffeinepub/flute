@@ -59,3 +59,31 @@ self.addEventListener('fetch', (event) => {
     })
   );
 });
+
+// ── Sticky notification support ──────────────────────────────────────────────
+let currentSongData = null;
+let stickyEnabled = false;
+let stickyTimer = null;
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SYNC_PLAYBACK') {
+    currentSongData = event.data.song;
+    stickyEnabled = event.data.stickyNotification;
+  }
+  if (event.data && event.data.type === 'NOTIFICATION_DISMISSED') {
+    if (stickyEnabled && currentSongData) {
+      clearTimeout(stickyTimer);
+      stickyTimer = setTimeout(() => {
+        // Tell all clients to re-trigger media session
+        self.clients.matchAll().then(clients => {
+          for (const client of clients) {
+            client.postMessage({
+              type: 'RETRIGGER_NOTIFICATION',
+              song: currentSongData
+            });
+          }
+        });
+      }, 3500);
+    }
+  }
+});

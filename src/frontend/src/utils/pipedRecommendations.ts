@@ -1,4 +1,4 @@
-import type { Song } from "../backend";
+import type { Song } from "../types/song";
 import { scoreTrack } from "./moodPrefs";
 
 const PIPED_INSTANCES = [
@@ -13,6 +13,23 @@ const PIPED_INSTANCES = [
   "https://pipedapi.coldmilk.com",
 ];
 
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const MAX_DURATION = 480; // 8 minutes
+const MIN_DURATION = 60; // 1 minute
+
+const REJECT_KEYWORDS = [
+  "short",
+  "clip",
+  "interview",
+  "reaction",
+  "episode",
+  "podcast",
+];
+const PREFER_KEYWORDS = ["official", "audio", "song", "lyrics", "music"];
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 function formatDuration(seconds: number): string {
   if (!seconds) return "0:00";
   const m = Math.floor(seconds / 60);
@@ -21,15 +38,92 @@ function formatDuration(seconds: number): string {
 }
 
 /**
- * Robust video ID extractor -- handles all Piped URL formats
+ * Robust video ID extractor — handles all Piped URL formats
  */
 function getVideoId(url: string): string {
   if (!url) return "";
   const qMatch = url.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
   if (qMatch) return qMatch[1];
+  const watchMatch = url.match(/\/watch\?v=([a-zA-Z0-9_-]{11})/);
+  if (watchMatch) return watchMatch[1];
   const pathMatch = url.match(/\/([a-zA-Z0-9_-]{11})(?:[?&#]|$)/);
   if (pathMatch) return pathMatch[1];
   return "";
+}
+
+/**
+ * FIX 1 — Music-only filter.
+ * Returns true if the track should be REJECTED.
+ */
+function isBadTrack(title: string, duration: number): boolean {
+  // Duration checks
+  if (!duration || duration <= MIN_DURATION) return true;
+  if (duration > MAX_DURATION) return true;
+
+  const lower = title.toLowerCase();
+  // Reject if contains any reject keyword
+  if (REJECT_KEYWORDS.some((kw) => lower.includes(kw))) return true;
+
+  return false;
+}
+
+/**
+ * FIX 2 — Similarity scoring system.
+ * Higher score = more relevant.
+ */
+function scoreSimilarity(
+  title: string,
+  uploader: string,
+  currentTitle: string,
+  currentUploader: string,
+): number {
+  let score = 0;
+  const titleLower = title.toLowerCase();
+  const currentUploaderLower = currentUploader.toLowerCase().trim();
+  const uploaderLower = uploader.toLowerCase().trim();
+
+  // +40 if same artist
+  if (
+    uploaderLower === currentUploaderLower &&
+    currentUploaderLower.length > 0
+  ) {
+    score += 40;
+  }
+
+  // +25 if title shares main keywords (3+ char words)
+  const currentWords = currentTitle
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w.length >= 3);
+  const titleWords = new Set(
+    titleLower.split(/\s+/).filter((w) => w.length >= 3),
+  );
+  const sharedCount = currentWords.filter((w) => titleWords.has(w)).length;
+  if (sharedCount >= 1) score += 25;
+
+  // +15 if title contains "official" or "audio"
+  if (titleLower.includes("official") || titleLower.includes("audio")) {
+    score += 15;
+  }
+
+  // Prefer keywords bonus
+  if (PREFER_KEYWORDS.some((kw) => titleLower.includes(kw))) {
+    score += 5;
+  }
+
+  // -30 if remix
+  if (titleLower.includes("remix")) score -= 30;
+
+  // -50 if live, concert, short
+  if (
+    titleLower.includes("live") ||
+    titleLower.includes("concert") ||
+    titleLower.includes("short")
+  ) {
+    score -= 50;
+  }
+
+  return score;
 }
 
 interface PipedRelatedStream {
@@ -38,10 +132,42 @@ interface PipedRelatedStream {
   uploaderName: string;
   thumbnail: string;
   duration: number;
+  type?: string;
 }
 
 // Cache results per videoId to avoid refetch
 const relatedCache = new Map<string, Song[]>();
+
+/**
+ * Try to re-fetch duration for a broken (0-duration) song from any Piped instance.
+ */
+async function refetchDuration(videoId: string): Promise<number> {
+  try {
+    const result = await Promise.any(
+      PIPED_INSTANCES.map(async (instance) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 5000);
+        try {
+          const res = await fetch(`${instance}/streams/${videoId}`, {
+            signal: controller.signal,
+          });
+          clearTimeout(timer);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+          const dur = data?.duration as number | undefined;
+          if (!dur || dur <= 0) throw new Error("no duration");
+          return dur;
+        } catch (e) {
+          clearTimeout(timer);
+          throw e;
+        }
+      }),
+    );
+    return result;
+  } catch {
+    return 0;
+  }
+}
 
 /**
  * Fetch from a single instance and VALIDATE before accepting.
@@ -50,7 +176,7 @@ const relatedCache = new Map<string, Song[]>();
 async function fetchAndValidate(
   instance: string,
   videoId: string,
-): Promise<Song[]> {
+): Promise<PipedRelatedStream[]> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
@@ -60,16 +186,14 @@ async function fetchAndValidate(
     clearTimeout(timer);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    const related: PipedRelatedStream[] = data.relatedStreams || [];
+    const related: PipedRelatedStream[] = (data.relatedStreams || []).filter(
+      (s: PipedRelatedStream) => s.type !== "channel" && s.type !== "playlist",
+    );
 
-    // VALIDATION: must have at least 5 entries before accepting
+    // VALIDATION: must have at least 5 stream entries before accepting
     if (related.length < 5) throw new Error("insufficient results");
 
-    const songs = filterAndMap(related, videoId);
-    if (songs.length < 3)
-      throw new Error("too few valid songs after filtering");
-
-    return songs;
+    return related;
   } catch (err) {
     clearTimeout(timer);
     throw err;
@@ -77,46 +201,146 @@ async function fetchAndValidate(
 }
 
 /**
- * Filter, map and deduplicate a list of related streams into Song objects.
+ * FIX 3 — Filter, score, and apply artist diversity.
+ *
+ * Pipeline:
+ * 1. Music-only filter (FIX 1)
+ * 2. Similarity scoring (FIX 2)
+ * 3. Artist diversity — interleave same/other artists (FIX 3)
  */
-function filterAndMap(
+async function filterAndMap(
   related: PipedRelatedStream[],
+  currentTitle: string,
+  currentUploader: string,
   excludeId?: string,
-): Song[] {
+): Promise<Song[]> {
   const seen = new Set<string>();
   if (excludeId) seen.add(excludeId);
 
-  return related
-    .filter((s) => s.duration > 30) // remove shorts and 0-duration
-    .map((s) => {
-      const vid = getVideoId(s.url);
-      return {
-        videoId: vid,
-        title: s.title || "",
-        channel: s.uploaderName || "",
-        thumbnail: s.thumbnail || `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
-        duration: formatDuration(s.duration),
-      };
-    })
-    .filter((s) => {
-      if (s.videoId.length !== 11) return false;
-      if (seen.has(s.videoId)) return false;
-      seen.add(s.videoId);
-      return true;
-    })
+  interface ScoredCandidate {
+    videoId: string;
+    title: string;
+    channel: string;
+    thumbnail: string;
+    rawDuration: number;
+    score: number;
+    isSameArtist: boolean;
+  }
+
+  const candidates: ScoredCandidate[] = [];
+
+  for (const s of related) {
+    const vid = getVideoId(s.url);
+    if (!vid || vid.length !== 11) continue;
+    if (seen.has(vid)) continue;
+    seen.add(vid);
+
+    let dur = s.duration;
+
+    // If duration is 0 or missing, try re-fetching
+    if (!dur || dur <= 0) {
+      dur = await refetchDuration(vid);
+    }
+
+    // FIX 1 — music-only filter (also catches 8-min cap)
+    if (isBadTrack(s.title || "", dur)) continue;
+
+    const uploaderLower = (s.uploaderName || "").toLowerCase().trim();
+    const currentUploaderLower = currentUploader.toLowerCase().trim();
+    const isSameArtist =
+      uploaderLower === currentUploaderLower && currentUploaderLower.length > 0;
+
+    // FIX 2 — compute similarity score
+    const score = scoreSimilarity(
+      s.title || "",
+      s.uploaderName || "",
+      currentTitle,
+      currentUploader,
+    );
+
+    candidates.push({
+      videoId: vid,
+      title: s.title || "",
+      channel: s.uploaderName || "",
+      thumbnail: s.thumbnail || `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
+      rawDuration: dur,
+      score,
+      isSameArtist,
+    });
+  }
+
+  // Sort by score descending
+  candidates.sort((a, b) => b.score - a.score);
+
+  // FIX 3 — Artist diversity: separate same/other artists
+  const sameArtist = candidates.filter((c) => c.isSameArtist);
+  const otherArtists = candidates.filter((c) => !c.isSameArtist);
+
+  // Per-uploader cap in otherArtists: max 2 from any single uploader
+  const uploaderCount = new Map<string, number>();
+  const diverseOthers = otherArtists.filter((c) => {
+    const key = c.channel.toLowerCase().trim();
+    const count = uploaderCount.get(key) ?? 0;
+    if (count >= 2) return false;
+    uploaderCount.set(key, count + 1);
+    return true;
+  });
+
+  // Interleave: max 2 consecutive same-artist in the first 4 results,
+  // then alternate so it stays diverse. Same artist CAN reappear after position 4.
+  const merged: ScoredCandidate[] = [];
+  let sameIdx = 0;
+  let otherIdx = 0;
+  let consecutiveSame = 0;
+
+  while (
+    merged.length < 20 &&
+    (sameIdx < sameArtist.length || otherIdx < diverseOthers.length)
+  ) {
+    // Enforce: if 2 consecutive same-artist, force an other-artist next
+    if (consecutiveSame >= 2 && otherIdx < diverseOthers.length) {
+      merged.push(diverseOthers[otherIdx++]);
+      consecutiveSame = 0;
+    } else if (
+      sameIdx < sameArtist.length &&
+      merged.length < 2 // first 2 slots prefer same artist
+    ) {
+      merged.push(sameArtist[sameIdx++]);
+      consecutiveSame++;
+    } else if (otherIdx < diverseOthers.length) {
+      merged.push(diverseOthers[otherIdx++]);
+      consecutiveSame = 0;
+      // After filling others, allow more same-artist
+    } else if (sameIdx < sameArtist.length) {
+      merged.push(sameArtist[sameIdx++]);
+      consecutiveSame++;
+    } else {
+      break;
+    }
+  }
+
+  // Apply mood score on top and cap at 20
+  return merged
     .sort(
       (a, b) => scoreTrack(b.title, b.channel) - scoreTrack(a.title, a.channel),
     )
-    .slice(0, 20);
+    .slice(0, 20)
+    .map((c) => ({
+      videoId: c.videoId,
+      title: c.title,
+      channel: c.channel,
+      thumbnail: c.thumbnail,
+      duration: formatDuration(c.rawDuration),
+    }));
 }
 
 /**
  * Smart fallback: search using track metadata instead of original query.
- * Never use the original search query -- always build from title + uploader.
  */
 async function smartFallbackSearch(
   title: string,
   uploader: string,
+  currentUploader: string,
   variant = 0,
 ): Promise<Song[]> {
   const queries = [
@@ -143,16 +367,17 @@ async function smartFallbackSearch(
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json();
           const items = (data?.items || []) as PipedRelatedStream[];
-          const songs = filterAndMap(items);
-          if (songs.length === 0) throw new Error("empty");
-          return songs;
+          if (items.length === 0) throw new Error("empty");
+          return items;
         } catch (err) {
           clearTimeout(timer);
           throw err;
         }
       }),
     );
-    return result;
+    const songs = await filterAndMap(result, title, currentUploader);
+    if (songs.length === 0) throw new Error("empty after filter");
+    return songs;
   } catch {
     return [];
   }
@@ -161,13 +386,13 @@ async function smartFallbackSearch(
 /**
  * Main export: fetch similar/related songs for a given videoId.
  *
- * Strategy:
- * 1. Try relatedStreams from all Piped instances (validated, min 5 entries)
- * 2. If all fail → smart search using title + uploader
- * 3. If still empty → broaden query with variants
- *
- * Queue and Similar Songs are COMPLETELY SEPARATE -- this function only
- * populates the Similar Songs tab; callers must NOT add these to the queue.
+ * Pipeline:
+ * 1. Parallel fetch + validation (min 5 relatedStreams)
+ * 2. Music-only filter (reject shorts/podcasts/interviews, >8 min, <1 min)
+ * 3. Similarity scoring (+40 same artist, +25 shared keywords, etc.)
+ * 4. Artist diversity (max 2 consecutive same artist, interleaved)
+ * 5. Smart fallback search (title + uploader, NEVER original search query)
+ * 6. Broaden query variants if still empty
  */
 export async function fetchRelatedSongs(
   videoId: string,
@@ -181,27 +406,29 @@ export async function fetchRelatedSongs(
     return relatedCache.get(videoId)!;
   }
 
+  const uploader = songUploader || "";
+  const title = songTitle || "";
+
   // Step 1: Try relatedStreams from all instances with validation
   let songs: Song[] = [];
   try {
-    songs = await Promise.any(
+    const rawStreams = await Promise.any(
       PIPED_INSTANCES.map((instance) => fetchAndValidate(instance, videoId)),
     );
+    songs = await filterAndMap(rawStreams, title, uploader, videoId);
   } catch {
-    // All instances failed or returned insufficient data
     songs = [];
   }
 
   // Step 2: Smart fallback search if relatedStreams failed
-  if (songs.length === 0 && songTitle) {
-    const uploader = songUploader || "";
-    songs = await smartFallbackSearch(songTitle, uploader, 0);
+  if (songs.length === 0 && title) {
+    songs = await smartFallbackSearch(title, uploader, uploader, 0);
   }
 
   // Step 3: Broaden query if still empty
-  if (songs.length === 0 && songTitle) {
+  if (songs.length === 0 && title) {
     for (let variant = 2; variant <= 4 && songs.length === 0; variant++) {
-      songs = await smartFallbackSearch(songTitle, songUploader || "", variant);
+      songs = await smartFallbackSearch(title, uploader, uploader, variant);
     }
   }
 
@@ -211,4 +438,11 @@ export async function fetchRelatedSongs(
   }
 
   return songs;
+}
+
+/**
+ * Invalidate cache for a specific videoId (useful when retrying).
+ */
+export function invalidateRelatedCache(videoId: string): void {
+  relatedCache.delete(videoId);
 }

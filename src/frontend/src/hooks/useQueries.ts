@@ -1,180 +1,176 @@
+/**
+ * useQueries.ts
+ *
+ * All data for Flute is stored locally (localStorage).
+ * These hooks provide a React Query wrapper over local utilities,
+ * keeping the same interface as before but without a backend actor.
+ */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { PlaylistId, Song, UserProfile } from "../backend";
-import { useActor } from "./useActor";
+import type { PlaylistId, Song, UserProfile } from "../types/song";
+import {
+  getLikedSongs,
+  isLiked,
+  likeSong,
+  unlikeSong,
+} from "../utils/localLikedSongs";
+import {
+  addSongToPlaylist,
+  createPlaylist,
+  deletePlaylist,
+  getPlaylists,
+  removeSongFromPlaylist,
+  renamePlaylist,
+} from "../utils/localPlaylists";
 
 // ── Queries ──────────────────────────────────────────────────────────────────
 
 export function useUserProfile() {
-  const { actor, isFetching } = useActor();
   return useQuery<UserProfile | null>({
     queryKey: ["userProfile"],
-    queryFn: async () => {
-      if (!actor) return null;
-      return actor.getCallerUserProfile();
-    },
-    enabled: !!actor && !isFetching,
+    queryFn: async () => null,
   });
 }
 
 export function useAllPlaylists() {
-  const { actor, isFetching } = useActor();
   return useQuery({
     queryKey: ["playlists"],
-    queryFn: async () => {
-      if (!actor) return [];
-      return actor.getAllPlaylists();
-    },
-    enabled: !!actor && !isFetching,
+    queryFn: async () => getPlaylists(),
   });
 }
 
-export function usePlaylist(playlistId: bigint | null) {
-  const { actor, isFetching } = useActor();
+export function usePlaylist(playlistId: PlaylistId | null) {
   return useQuery({
     queryKey: ["playlist", playlistId?.toString()],
     queryFn: async () => {
-      if (!actor || playlistId === null) return null;
-      return actor.getPlaylist(playlistId);
+      if (playlistId === null) return null;
+      const pls = getPlaylists();
+      return pls.find((p) => p.id === playlistId.toString()) ?? null;
     },
-    enabled: !!actor && !isFetching && playlistId !== null,
+    enabled: playlistId !== null,
   });
 }
 
 export function useLikedSongs() {
-  const { actor, isFetching } = useActor();
   return useQuery<Song[]>({
     queryKey: ["likedSongs"],
-    queryFn: async () => {
-      if (!actor) return [];
-      return actor.getLikedSongs();
-    },
-    enabled: !!actor && !isFetching,
+    queryFn: async () => getLikedSongs(),
   });
 }
 
 export function useListeningHistory() {
-  const { actor, isFetching } = useActor();
   return useQuery({
     queryKey: ["history"],
-    queryFn: async () => {
-      if (!actor) return [];
-      return actor.getListeningHistory();
-    },
-    enabled: !!actor && !isFetching,
+    queryFn: async () => [] as Song[],
   });
 }
 
 export function useAllSongs() {
-  const { actor, isFetching } = useActor();
   return useQuery<Song[]>({
     queryKey: ["allSongs"],
     queryFn: async () => {
-      if (!actor) return [];
-      return actor.getAllSongs();
+      try {
+        const cache = JSON.parse(
+          localStorage.getItem("flute_song_cache") || "{}",
+        ) as Record<string, Song>;
+        return Object.values(cache);
+      } catch {
+        return [];
+      }
     },
-    enabled: !!actor && !isFetching,
   });
 }
 
 // ── Mutations ─────────────────────────────────────────────────────────────────
 
 export function useSaveProfile() {
-  const { actor } = useActor();
-  const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (profile: UserProfile) => {
-      if (!actor) throw new Error("No actor");
-      return actor.saveCallerUserProfile(profile);
+    mutationFn: async (_profile: UserProfile) => {
+      // No-op — profiles not implemented
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["userProfile"] }),
   });
 }
 
 export function useCacheSong() {
-  const { actor } = useActor();
-  const qc = useQueryClient();
   return useMutation({
     mutationFn: async (song: Song) => {
-      if (!actor) throw new Error("No actor");
-      return actor.cacheSong(song);
+      try {
+        const cache = JSON.parse(
+          localStorage.getItem("flute_song_cache") || "{}",
+        ) as Record<string, Song>;
+        cache[song.videoId] = song;
+        localStorage.setItem("flute_song_cache", JSON.stringify(cache));
+      } catch {
+        // ignore
+      }
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["allSongs"] }),
   });
 }
 
 export function useLikeSong() {
-  const { actor } = useActor();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (songId: string) => {
-      if (!actor) throw new Error("No actor");
-      return actor.likeSong(songId);
+      const cache = JSON.parse(
+        localStorage.getItem("flute_song_cache") || "{}",
+      ) as Record<string, Song>;
+      const song = cache[songId];
+      if (song) likeSong(song);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["likedSongs"] }),
   });
 }
 
 export function useUnlikeSong() {
-  const { actor } = useActor();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (songId: string) => {
-      if (!actor) throw new Error("No actor");
-      return actor.unlikeSong(songId);
+      unlikeSong(songId);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["likedSongs"] }),
   });
 }
 
 export function useCreatePlaylist() {
-  const { actor } = useActor();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (name: string) => {
-      if (!actor) throw new Error("No actor");
-      return actor.createPlaylist(name);
+      return createPlaylist(name);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["playlists"] }),
   });
 }
 
 export function useDeletePlaylist() {
-  const { actor } = useActor();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (playlistId: PlaylistId) => {
-      if (!actor) throw new Error("No actor");
-      return actor.deletePlaylist(playlistId);
+      deletePlaylist(playlistId.toString());
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["playlists"] }),
   });
 }
 
 export function useRenamePlaylist() {
-  const { actor } = useActor();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({
       playlistId,
       name,
     }: { playlistId: PlaylistId; name: string }) => {
-      if (!actor) throw new Error("No actor");
-      return actor.renamePlaylist(playlistId, name);
+      renamePlaylist(playlistId.toString(), name);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["playlists"] }),
   });
 }
 
 export function useAddSongToPlaylist() {
-  const { actor } = useActor();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({
       playlistId,
       songId,
     }: { playlistId: PlaylistId; songId: string }) => {
-      if (!actor) throw new Error("No actor");
-      return actor.addSongToPlaylist(playlistId, songId);
+      addSongToPlaylist(playlistId.toString(), songId);
     },
     onSuccess: (_d, { playlistId }) => {
       qc.invalidateQueries({ queryKey: ["playlist", playlistId.toString()] });
@@ -184,15 +180,13 @@ export function useAddSongToPlaylist() {
 }
 
 export function useRemoveSongFromPlaylist() {
-  const { actor } = useActor();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({
       playlistId,
       songId,
     }: { playlistId: PlaylistId; songId: string }) => {
-      if (!actor) throw new Error("No actor");
-      return actor.removeSongFromPlaylist(playlistId, songId);
+      removeSongFromPlaylist(playlistId.toString(), songId);
     },
     onSuccess: (_d, { playlistId }) => {
       qc.invalidateQueries({ queryKey: ["playlist", playlistId.toString()] });
@@ -201,43 +195,38 @@ export function useRemoveSongFromPlaylist() {
 }
 
 export function useRecordListening() {
-  const { actor } = useActor();
-  const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (songId: string) => {
-      if (!actor) throw new Error("No actor");
-      return actor.recordListening(songId);
+    mutationFn: async (_songId: string) => {
+      // Listening is tracked locally via addToLocalHistory in YouTubePlayer
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["history"] }),
   });
 }
 
 export function useFetchLyrics(
-  artist: string,
-  title: string,
-  enabled: boolean,
+  _artist: string,
+  _title: string,
+  _enabled: boolean,
 ) {
-  const { actor, isFetching } = useActor();
   return useQuery<string>({
-    queryKey: ["lyrics", artist, title],
-    queryFn: async () => {
-      if (!actor) return "";
-      return actor.fetchLyrics(artist, title);
-    },
-    enabled: !!actor && !isFetching && enabled && !!artist && !!title,
+    queryKey: ["lyrics", _artist, _title],
+    queryFn: async () => "",
+    enabled: false,
     staleTime: 1000 * 60 * 60,
   });
 }
 
 export function useCacheLyrics() {
-  const { actor } = useActor();
   return useMutation({
     mutationFn: async ({
-      songId,
-      lyrics,
+      songId: _songId,
+      lyrics: _lyrics,
     }: { songId: string; lyrics: string }) => {
-      if (!actor) throw new Error("No actor");
-      return actor.cacheLyrics(songId, lyrics);
+      // No-op — lyrics caching not implemented locally
     },
   });
+}
+
+/** Check if a song is liked (used in NowPlaying). */
+export function useIsLiked(videoId: string): boolean {
+  return isLiked(videoId);
 }

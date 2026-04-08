@@ -11,12 +11,12 @@ import { cn } from "@/lib/utils";
 import { Heart, ListPlus, MoreHorizontal, Play, Plus } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-import type { Song } from "../../backend";
 import {
   useLocalLikedSongs,
   useLocalPlaylists,
 } from "../../hooks/useLocalQueries";
 import { usePlayerStore } from "../../store/playerStore";
+import type { Song } from "../../types/song";
 
 interface SongCardProps {
   song: Song;

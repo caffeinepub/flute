@@ -8,10 +8,10 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   Clock,
   Edit2,
+  Heart,
   Library as LibraryIcon,
   Music,
   Plus,
@@ -20,12 +20,12 @@ import {
 import { motion } from "motion/react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { SongCard } from "../components/SongCard/SongCard";
 import { useLocalPlaylists } from "../hooks/useLocalQueries";
 import { useNavigationStore } from "../store/navigationStore";
 import { usePlayerStore } from "../store/playerStore";
 import { getLocalHistory } from "../utils/localHistory";
 import type { HistoryEntry } from "../utils/localHistory";
+import { getLikedSongs } from "../utils/localLikedSongs";
 
 const EMPTY_SLOTS = ["e0", "e1", "e2", "e3"];
 
@@ -79,6 +79,9 @@ export function Library() {
 
   // History from local storage
   const history: HistoryEntry[] = getLocalHistory();
+
+  // Liked songs count
+  const likedCount = getLikedSongs().length;
 
   // Get song cache for playlist thumbnails
   const songCache: Record<
@@ -160,12 +163,38 @@ export function Library() {
       {/* Playlists tab */}
       {activeTab === "playlists" && (
         <div>
+          {/* Liked Songs — ALWAYS first, prominent card */}
+          <motion.button
+            type="button"
+            data-ocid="library.liked_songs_card"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            onClick={() => navigate("liked")}
+            className="w-full mb-5 flex items-center gap-4 px-4 py-4 rounded-2xl bg-gradient-to-r from-primary/20 via-primary/10 to-transparent border border-primary/25 hover:border-primary/50 hover:from-primary/30 transition-all group text-left shadow-card"
+          >
+            <div className="w-14 h-14 rounded-xl bg-primary/20 flex items-center justify-center flex-shrink-0 group-hover:bg-primary/30 transition-colors">
+              <Heart className="w-7 h-7 text-primary fill-primary" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-base font-bold text-foreground">Liked Songs</p>
+              <p className="text-sm text-muted-foreground mt-0.5">
+                {likedCount === 0
+                  ? "Songs you love"
+                  : `${likedCount} ${likedCount === 1 ? "song" : "songs"}`}
+              </p>
+            </div>
+            <div className="flex items-center gap-1 text-primary text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity pr-1">
+              <span>Open</span>
+              <span>→</span>
+            </div>
+          </motion.button>
+
           {playlists.length === 0 ? (
             <motion.div
               data-ocid="library.empty_state"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="text-center py-20"
+              className="text-center py-16"
             >
               <LibraryIcon className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
               <h3 className="text-lg font-semibold text-foreground mb-2">

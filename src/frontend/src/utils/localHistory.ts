@@ -1,4 +1,4 @@
-import type { Song } from "../backend";
+import type { Song } from "../types/song";
 
 export interface HistoryEntry {
   song: Song;

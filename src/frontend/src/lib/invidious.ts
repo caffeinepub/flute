@@ -1,4 +1,4 @@
-import type { Song } from "../backend";
+import type { Song } from "../types/song";
 
 // Piped is a CORS-enabled YouTube alternative API
 const PIPED_INSTANCES = [

@@ -1,11 +1,11 @@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Music, Play } from "lucide-react";
 import { motion } from "motion/react";
-import type { Song } from "../backend";
 import { SongCard } from "../components/SongCard/SongCard";
 import { useLocalAuth } from "../hooks/useLocalAuth";
 import { useLocalPlaylists } from "../hooks/useLocalQueries";
 import { useNavigationStore } from "../store/navigationStore";
+import type { Song } from "../types/song";
 import { getLocalHistory } from "../utils/localHistory";
 
 const GENRES = [

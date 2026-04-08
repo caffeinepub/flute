@@ -13,11 +13,11 @@ import {
 import { motion } from "motion/react";
 import { useState } from "react";
 import { toast } from "sonner";
-import type { Song } from "../backend";
 import { SongCard } from "../components/SongCard/SongCard";
 import { useLocalPlaylists } from "../hooks/useLocalQueries";
 import { useNavigationStore } from "../store/navigationStore";
 import { usePlayerStore } from "../store/playerStore";
+import type { Song } from "../types/song";
 import { getPlaylists } from "../utils/localPlaylists";
 
 interface PlaylistDetailProps {

@@ -8,9 +8,9 @@ import Iter "mo:core/Iter";
 import Bool "mo:core/Bool";
 import Runtime "mo:core/Runtime";
 import Order "mo:core/Order";
-import OutCall "http-outcalls/outcall";
-import AccessControl "authorization/access-control";
-import MixinAuthorization "authorization/MixinAuthorization";
+import OutCall "mo:caffeineai-http-outcalls/outcall";
+import AccessControl "mo:caffeineai-authorization/access-control";
+import MixinAuthorization "mo:caffeineai-authorization/MixinAuthorization";
 
 actor {
   type PlaylistId = Nat;
